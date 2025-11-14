@@ -5,6 +5,7 @@ const axios = require('axios');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const cloudinary = require('cloudinary').v2; // ¡IMPORTANTE!
 
 const app = express();
 app.use(express.json());
@@ -14,8 +15,15 @@ const PORT = process.env.PORT || 3001;
 const MAIN_API_URL = process.env.MAIN_API_URL; 
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY; 
 
-if (!MAIN_API_URL || !ADMIN_API_KEY) {
-    console.error("¡ERROR FATAL! Faltan MAIN_API_URL o ADMIN_API_KEY en el .env");
+// --- ¡NUEVO! Configuración de Cloudinary ---
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+if (!MAIN_API_URL || !ADMIN_API_KEY || !process.env.CLOUDINARY_CLOUD_NAME) {
+    console.error("¡ERROR FATAL! Faltan MAIN_API_URL, ADMIN_API_KEY o credenciales de CLOUDINARY en el .env");
     process.exit(1);
 }
 
@@ -24,23 +32,23 @@ const AVATAR_DIR = path.join(__dirname, 'avatars');
 const TEMP_DIR = path.join(__dirname, 'temp');
 
 // --- Endpoint principal ---
-// Tu API de $7 llamará a esta ruta
 app.post('/api/v1/generate-video', async (req, res) => {
-    // 1. Seguridad: Validar que la llamada venga de tu propia API
+    // 1. Seguridad
     if (req.headers['x-api-key'] !== ADMIN_API_KEY) {
         return res.status(403).json({ error: 'Acceso no autorizado.' });
     }
 
+    // ¡CAMBIO! Recibimos 'miniaturaUrl'
     const { texto, articleId, miniaturaUrl } = req.body;
     
     if (!texto || !articleId) {
         return res.status(400).json({ error: 'Faltan texto o articleId' });
     }
 
-    // 2. Responder INMEDIATAMENTE a la API principal (Modo "Fire-and-Forget")
+    // 2. Responder INMEDIATAMENTE
     res.json({ message: 'Procesamiento de video iniciado.' });
 
-    // --- El trabajo pesado comienza AHORA (en segundo plano) ---
+    // --- El trabajo pesado comienza AHORA ---
     console.log(`[JOB ${articleId}] Iniciado.`);
     const audioPath = path.join(TEMP_DIR, `${articleId}_audio.wav`);
     const videoPath = path.join(TEMP_DIR, `${articleId}_final.mp4`);
@@ -56,20 +64,22 @@ app.post('/api/v1/generate-video', async (req, res) => {
         const finalVideoFile = await runFFmpeg(audioFile, videoPath);
         console.log(`[JOB ${articleId}] FFmpeg completado: ${finalVideoFile}`);
 
-        // --- PASO C: Subir a Ezoic (¡REEMPLAZAR SIMULACIÓN!) ---
-        console.log(`[JOB ${articleId}] Subiendo a Ezoic...`);
-        const ezoicUrl = await uploadToEzoic(finalVideoFile, miniaturaUrl);
-        console.log(`[JOB ${articleId}] Subida completa: ${ezoicUrl}`);
+        // --- ¡¡PASO C MODIFICADO!! Subir a Cloudinary ---
+        console.log(`[JOB ${articleId}] Subiendo a Cloudinary...`);
+        // Pasamos la miniatura a Cloudinary para que la use como "imagen de póster"
+        const cloudinaryResult = await uploadToCloudinary(finalVideoFile, articleId, miniaturaUrl);
+        console.log(`[JOB ${articleId}] Subida a Cloudinary completa: ${cloudinaryResult.secure_url}`);
 
-        // --- PASO D: Avisar a la API Principal (lfaftechapi) ---
+        // --- ¡¡PASO D MODIFICADO!! Avisar a la API Principal ---
         console.log(`[JOB ${articleId}] Notificando a la API principal...`);
-        await notifyMainApi(articleId, ezoicUrl, null);
+        // Enviamos la 'cloudinary_url' y la 'miniaturaUrl'
+        await notifyMainApi(articleId, cloudinaryResult.secure_url, miniaturaUrl, null);
         console.log(`[JOB ${articleId}] ¡TRABAJO FINALIZADO!`);
 
     } catch (error) {
         console.error(`[JOB ${articleId}] Error fatal: ${error.message}`);
         // Avisar a la API principal que este job falló
-        await notifyMainApi(articleId, null, error.message);
+        await notifyMainApi(articleId, null, miniaturaUrl, error.message);
     } finally {
         // Limpiar archivos temporales
         if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
@@ -80,16 +90,13 @@ app.post('/api/v1/generate-video', async (req, res) => {
 // --- Funciones de Ayuda (Helpers) ---
 
 function runCoquiTTS(text, audioOutputPath) {
+    // (Esta función no cambia)
     return new Promise((resolve, reject) => {
         console.log(`[CoquiTTS] Llamando a tts_script.py...`);
-        // Limpiamos el texto para la línea de comandos
         const cleanText = text.replace(/"/g, "'").replace(/\n/g, " ");
-
         const pythonProcess = spawn('python3', ['tts_script.py', cleanText, audioOutputPath]);
-
         pythonProcess.stdout.on('data', (data) => console.log(`[CoquiTTS-STDOUT]: ${data}`));
         pythonProcess.stderr.on('data', (data) => console.error(`[CoquiTTS-STDERR]: ${data}`));
-
         pythonProcess.on('close', (code) => {
             if (code !== 0) {
                 return reject(new Error(`CoquiTTS falló (código ${code})`));
@@ -100,8 +107,8 @@ function runCoquiTTS(text, audioOutputPath) {
 }
 
 function runFFmpeg(audioInput, videoOutput) {
+    // (Esta función no cambia)
     return new Promise((resolve, reject) => {
-        // 1. Cargar lista de avatares y elegir uno
         const avatars = fs.readdirSync(AVATAR_DIR).filter(f => f.endsWith('.mp4'));
         if (avatars.length === 0) {
             return reject(new Error("No se encontraron videos en la carpeta /avatars"));
@@ -110,7 +117,6 @@ function runFFmpeg(audioInput, videoOutput) {
         const avatarPath = path.join(AVATAR_DIR, randomAvatar);
         console.log(`[FFmpeg] Usando avatar: ${randomAvatar}`);
 
-        // 2. Comando FFmpeg (copia video, re-codifica audio, usa el más corto)
         const args = [
             '-i', avatarPath,     // Input 0 (Video)
             '-i', audioInput,     // Input 1 (Audio)
@@ -122,11 +128,8 @@ function runFFmpeg(audioInput, videoOutput) {
             '-y',                 // Sobrescribir output si existe
             videoOutput
         ];
-
         const ffmpegProcess = spawn('ffmpeg', args);
-
         ffmpegProcess.stderr.on('data', (data) => console.error(`[FFmpeg-STDERR]: ${data}`));
-
         ffmpegProcess.on('close', (code) => {
             if (code !== 0) {
                 return reject(new Error(`FFmpeg falló (código ${code})`));
@@ -136,31 +139,43 @@ function runFFmpeg(audioInput, videoOutput) {
     });
 }
 
-async function uploadToEzoic(videoPath, thumbnailUrl) {
-    // --- ================================== ---
-    // --- ¡¡SIMULACIÓN!! ¡DEBES REEMPLAZAR ESTO! ---
-    // --- ================================== ---
-    // Aquí es donde usas `axios` o la librería de Ezoic
-    // para subir el `videoPath` (usando `fs.createReadStream(videoPath)`)
-    // y la `thumbnailUrl` (si la API de Ezoic lo permite).
-    
-    console.log(`[Ezoic] SIMULANDO subida de ${videoPath}...`);
-    await new Promise(res => setTimeout(res, 3000)); // Simular 3s de subida
-    
-    // Devuelve una URL falsa de Ezoic
-    const fakeEzoicUrl = `https://simulado.ezoic.com/video/${path.basename(videoPath)}`;
-    return fakeEzoicUrl;
-    // --- ================================== ---
+/**
+ * ¡NUEVA FUNCIÓN!
+ * Sube el video final a Cloudinary.
+ */
+async function uploadToCloudinary(videoPath, articleId, miniaturaUrl) {
+    try {
+        const result = await cloudinary.uploader.upload(videoPath, {
+            resource_type: "video",
+            folder: "noticias_lat_videos", // Carpeta en Cloudinary
+            public_id: articleId,         // Usa el ID del artículo como ID público
+            overwrite: true,
+            // ¡Truco! Usamos la miniatura de la noticia como la imagen "poster"
+            // que se muestra antes de dar play al video.
+            // Cloudinary la descargará y la asociará.
+            image_url: miniaturaUrl 
+        });
+        return result;
+    } catch (error) {
+        console.error(`[Cloudinary] Error subiendo ${videoPath}:`, error.message);
+        throw new Error(`Fallo en la subida a Cloudinary: ${error.message}`);
+    }
 }
 
-async function notifyMainApi(articleId, videoUrl, errorMessage) {
+
+/**
+ * ¡FUNCIÓN MODIFICADA!
+ * Ahora envía la 'cloudinary_url' y la 'miniaturaUrl' a la API principal.
+ */
+async function notifyMainApi(articleId, cloudinaryUrl, miniaturaUrl, errorMessage) {
     try {
         await axios.post(
             `${MAIN_API_URL}/api/article/video-complete`,
             {
                 articleId: articleId,
-                videoUrl: videoUrl, // Será null si hay un error
-                error: errorMessage // Será null si hay éxito
+                cloudinary_url: cloudinaryUrl, // ¡CAMBIO!
+                miniatura_url: miniaturaUrl,   // ¡NUEVO!
+                error: errorMessage 
             },
             {
                 headers: { 'x-api-key': ADMIN_API_KEY }
@@ -173,9 +188,7 @@ async function notifyMainApi(articleId, videoUrl, errorMessage) {
 }
 
 app.listen(PORT, () => {
-    // Asegurarse que las carpetas 'temp' y 'avatars' existan
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
     if (!fs.existsSync(AVATAR_DIR)) fs.mkdirSync(AVATAR_DIR);
-    
     console.log(`🚀 Servidor Worker 'tts-fmpeg' corriendo en puerto ${PORT}`);
 });
