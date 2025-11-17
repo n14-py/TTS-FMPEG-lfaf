@@ -16,9 +16,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar el resto de la aplicación (app.py, video_generator.py, etc.)
 COPY . .
 
-# Exponer el puerto que usa Flask (5001)
-EXPOSE 5001
+# --- ¡CAMBIO IMPORTANTE! ---
+# Ya no exponemos el 5001, dejaremos que Render elija.
+# EXPOSE 5001 <--- (Línea eliminada)
 
-# Comando para correr la aplicación en producción
-# Usamos Gunicorn en lugar de "python app.py"
-CMD ["gunicorn", "--bind", "0.0.0.0:5001", "app:app"]
+# --- ¡ESTA ES LA LÍNEA CORREGIDA! ---
+# En lugar de "5001", usamos "$PORT".
+# Gunicorn leerá la variable de entorno de Render (que será 3001)
+# y se iniciará en el puerto correcto.
+CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "app:app"]
