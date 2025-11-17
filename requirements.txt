@@ -1,5 +1,7 @@
 Flask
-gTTS
+TTS
+requests
+python-dotenv
 google-api-python-client
 google-auth-oauthlib
-gunicorn  
+gunicorn
