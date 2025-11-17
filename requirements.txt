@@ -1,0 +1,5 @@
+Flask
+gTTS
+google-api-python-client
+google-auth-oauthlib
+gunicorn  
