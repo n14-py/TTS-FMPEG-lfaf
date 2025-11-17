@@ -16,12 +16,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar el resto de la aplicación (app.py, video_generator.py, etc.)
 COPY . .
 
-# --- ¡CAMBIO IMPORTANTE! ---
-# Ya no exponemos el 5001, dejaremos que Render elija.
-# EXPOSE 5001 <--- (Línea eliminada)
-
 # --- ¡ESTA ES LA LÍNEA CORREGIDA! ---
-# En lugar de "5001", usamos "$PORT".
-# Gunicorn leerá la variable de entorno de Render (que será 3001)
-# y se iniciará en el puerto correcto.
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "app:app"]
+# En lugar de usar corchetes [], usamos un string.
+# Esto obliga a Docker a ejecutar el comando en un shell (/bin/sh -c "...")
+# El shell SÍ sabe cómo reemplazar $PORT por el valor 3001 que le da Render.
+CMD gunicorn --bind "0.0.0.0:$PORT" app:app
