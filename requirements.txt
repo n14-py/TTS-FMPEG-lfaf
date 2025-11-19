@@ -1,5 +1,4 @@
 Flask
-# REEMPLAZAMOS: TTS
 piper-tts
 requests
 python-dotenv

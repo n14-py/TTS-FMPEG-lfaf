@@ -1,10 +1,10 @@
 import os
 import time
 import requests 
-import subprocess # ¡NUEVO! Para llamar a Piper (tts)
+import subprocess # Para llamar a Piper (tts)
 from dotenv import load_dotenv
-# ELIMINAMOS: from TTS.api import TTS
 # ELIMINAMOS: import gc (Ya no hace falta la limpieza de memoria)
+# ELIMINAMOS: import torch (Ya no hace falta)
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -22,8 +22,8 @@ AUDIO_PATH = "temp_audio/news_audio.mp3"
 FINAL_VIDEO_PATH = "output/final_news_video.mp4"
 
 # --- MODELO PIPER ---
-# Este es el reemplazo ultraligero y de buena calidad para español
-PIPER_MODEL = "es_ES-karlen-low" 
+PIPER_MODEL_NAME = "es_ES-carlfm-x_low"
+PIPER_MODEL_DIR = "/app/models/piper" # La ruta donde lo descargamos en Dockerfile
 
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 API_SERVICE_NAME = 'youtube'
@@ -46,35 +46,32 @@ def _report_status_to_api(endpoint, article_id, data={}):
         print(f"ERROR CALLBACK: {e}")
 
 # --- PASO 1: Generar Audio (CON PIPER) ---
-# ... después de la línea de comandos ...
-
-# --- PASO 1: Generar Audio (CON PIPER) ---
 def generar_audio(text):
     """Genera audio usando el motor ultraligero Piper."""
-    print(f"Iniciando Paso 1: Generando audio con Piper ({PIPER_MODEL})...")
+    print(f"Iniciando Paso 1: Generando audio con Piper ({PIPER_MODEL_NAME})...")
     
     start_time = time.time()
     
-    # 1. Creamos el comando de Piper CLI
+    # 1. Creamos el comando de Piper CLI, apuntando a los archivos descargados
     command = [
         "piper",
-        "--model", PIPER_MODEL,
+        "--model", os.path.join(PIPER_MODEL_DIR, f"{PIPER_MODEL_NAME}.onnx"), # Ruta al archivo .onnx
+        "--config", os.path.join(PIPER_MODEL_DIR, f"{PIPER_MODEL_NAME}.onnx.json"), # Ruta al archivo .json
         "--output_file", AUDIO_PATH
-        # ¡ELIMINADO: Ya NO se usa el argumento --speaker "default"!
     ]
     
-    # 2. Ejecutamos el comando y enviamos el texto a través de stdin
+    # 2. Ejecutamos el comando
     try:
-        # Usamos subprocess.run para mayor seguridad
         process = subprocess.run(command, input=text.encode('utf-8'), capture_output=True, check=True)
         
+        # Opcional: limpiar la advertencia normal de GPU
         if process.stderr:
-            # Capturamos la advertencia normal de GPU, pero lanzamos error si es algo más
-            if "GPU device discovery failed" not in process.stderr.decode('utf-8'):
-                 print(f"Error/Advertencia de Piper: {process.stderr.decode('utf-8')}")
+            stderr_output = process.stderr.decode('utf-8')
+            if "GPU device discovery failed" not in stderr_output:
+                 print(f"Advertencia de Piper: {stderr_output}")
             
         if not os.path.exists(AUDIO_PATH):
-             raise Exception("Piper no generó el archivo de audio. Verifique logs para el error real.")
+             raise Exception("Piper no generó el archivo de audio. Verifique si el modelo fue descargado correctamente.")
              
     except subprocess.CalledProcessError as e:
         raise Exception(f"Error al ejecutar Piper: {e.stderr.decode('utf-8')}")
@@ -85,9 +82,8 @@ def generar_audio(text):
     print(f"Audio guardado (Tardó {end_time - start_time:.2f}s). ¡RAM limpia!")
     
     return AUDIO_PATH
-# --- PASO 2: Generar Video (1080p, 1 FPS) ---
-# ... (El resto de las funciones son iguales, solo las pego para completar el archivo) ...
 
+# --- PASO 2: Generar Video (1080p, 1 FPS) ---
 def generar_video_ia(audio_path, imagen_path):
     """
     Genera video Horizontal 1080p a 1 FPS y 1 Hilo (Máx. Estabilidad).
@@ -105,6 +101,7 @@ def generar_video_ia(audio_path, imagen_path):
     )
     
     try:
+        # Usamos subprocess.run para ejecutar el comando
         subprocess.run(ffmpeg_command, shell=True, check=True)
         print(f"Video guardado en {FINAL_VIDEO_PATH}")
         return FINAL_VIDEO_PATH
@@ -112,6 +109,7 @@ def generar_video_ia(audio_path, imagen_path):
         print(f"Error en ffmpeg: {e}")
         return None
 
+# --- PASO 3: Subir a YouTube ---
 def subir_a_youtube(video_path, title, full_text, article_id):
     """Subida con Título ULTRA SEGURO (Máx 98 caracteres) y Público"""
     print("Iniciando Paso 3: Subiendo a YouTube...")
@@ -133,6 +131,7 @@ def subir_a_youtube(video_path, title, full_text, article_id):
     try:
         youtube = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
         
+        # --- TÍTULO SEGURO ---
         suffix = " // Noticias.lat"
         max_total_length = 98 
         max_title_length = max_total_length - len(suffix) 
@@ -144,6 +143,7 @@ def subir_a_youtube(video_path, title, full_text, article_id):
             
         final_title = f"{clean_title}{suffix}"
         
+        # --- DESCRIPCIÓN ---
         article_link = f"{FRONTEND_BASE_URL}/articulo/{article_id}"
         safe_text = full_text[:4700].strip()
         if len(full_text) > 4700:
@@ -188,9 +188,9 @@ def subir_a_youtube(video_path, title, full_text, article_id):
 def process_video_task(text_content, title, anchor_image_path, article_id):
     youtube_id = None
     try:
-        # Ya no se necesita gc.collect() aquí
+        # Ya no se necesita gc.collect() aquí, Piper es ligero
         
-        # 1. Audio (Ahora con Piper)
+        # 1. Audio (Con Piper)
         audio_file = generar_audio(text_content)
         if not audio_file: raise Exception("Falló audio")
 
@@ -214,4 +214,4 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
         print("Limpiando archivos...")
         if os.path.exists(AUDIO_PATH): os.remove(AUDIO_PATH)
         if os.path.exists(FINAL_VIDEO_PATH): os.remove(FINAL_VIDEO_PATH)
-        # Ya no se necesita gc.collect() aquí
+        # Limpieza final de RAM
