@@ -60,7 +60,7 @@ def _report_status_to_api(endpoint, article_id, data={}):
         print(f"ERROR FATAL DE CALLBACK: No se pudo reportar a la API. {e}")
 
 
-# --- PASO 1: Generar Audio (CORREGIDO) ---
+# --- PASO 1: Generar Audio ---
 def generar_audio(text):
     """Paso 1: Convierte texto a voz usando Coqui TTS (Modelo VITS)."""
     if not tts_model:
@@ -70,26 +70,44 @@ def generar_audio(text):
     
     start_time = time.time()
     
-    # --- CORRECCIÓN AQUÍ: Sin language='es' ---
+    # Usamos el modelo cargado globalmente
+    # IMPORTANTE: Sin language='es' porque el modelo es monolingüe
     tts_model.tts_to_file(
         text=text,
         file_path=AUDIO_PATH
-        # ELIMINADO: language='es' (El modelo ya sabe que es español)
     )
     
     end_time = time.time()
     print(f"Audio guardado en {AUDIO_PATH} (Tardó {end_time - start_time:.2f} segundos)")
     return AUDIO_PATH
 
-# --- PASO 2: Generar Video (Simulación FFmpeg) ---
+# --- PASO 2: Generar Video (SÚPER OPTIMIZADO) ---
 def generar_video_ia(audio_path, imagen_path):
     """
-    Paso 2: Genera el video uniendo audio e imagen estática.
+    Paso 2: Genera el video (MODO SÚPER SEGURO).
+    - 1 Hilo: Imposible que sature la RAM.
+    - 1 FPS: Mínimo trabajo posible para el procesador.
+    - 720p: Resolución HD pero ligera.
     """
-    print("Iniciando Paso 2: Generando video (Simulación FFmpeg)...")
+    print("Iniciando Paso 2: Generando video (Modo 1 Hilo / 1 FPS)...")
     
-    # Comando simple para unir imagen + audio
-    ffmpeg_command = f"ffmpeg -y -loop 1 -i \"{imagen_path}\" -i \"{audio_path}\" -c:v libx264 -tune stillimage -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -vf \"scale=1080:1920,setsar=1\" \"{FINAL_VIDEO_PATH}\""
+    # EXPLICACIÓN DE LA OPTIMIZACIÓN:
+    # -threads 1: Seguridad máxima de memoria.
+    # -r 1: Solo 1 cuadro por segundo. ¡Video de 1 min = solo 60 cuadros!
+    # -preset ultrafast: Lo más rápido posible.
+    # scale=720:1280: 720p Vertical (HD Ligero).
+    # -crf 32: Compresión alta para archivo liviano.
+    
+    ffmpeg_command = (
+        f"ffmpeg -y -loop 1 -i \"{imagen_path}\" -i \"{audio_path}\" "
+        f"-threads 1 "
+        f"-r 1 "
+        f"-c:v libx264 -preset ultrafast -tune stillimage -crf 32 "
+        f"-c:a aac -b:a 64k -ac 1 "
+        f"-pix_fmt yuv420p -shortest "
+        f"-vf \"scale=720:1280,setsar=1\" "
+        f"\"{FINAL_VIDEO_PATH}\""
+    )
     
     try:
         os.system(ffmpeg_command)
@@ -128,7 +146,7 @@ def subir_a_youtube(video_path, title, description):
                 'categoryId': '25' # Noticias y Política
             },
             'status': {
-                'privacyStatus': 'unlisted', # 'unlisted' (Oculto) o 'public'
+                'privacyStatus': 'unlisted', # 'unlisted' = Oculto
                 'selfDeclaredMadeForKids': False
             }
         }
@@ -167,6 +185,7 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
             raise Exception("Falló la generación de video con FFmpeg")
 
         # 3. Subir a YouTube
+        # Descripción cortada para no exceder límites si fuera necesario
         description = f"Video generado por IA. Contenido: {text_content[:300]}..."
         youtube_id = subir_a_youtube(video_file, title, description)
         
