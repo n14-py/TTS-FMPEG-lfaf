@@ -4,8 +4,7 @@ import requests # ¡NUEVO! Para llamar de vuelta a la API
 from dotenv import load_dotenv # ¡NUEVO! Para leer el .env
 
 # --- ¡CAMBIO! Importamos la nueva librería ---
-from tts.api import TTS
-
+from TTS.api import TTS
 # --- Importaciones de YouTube (sin cambios) ---
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload

@@ -17,8 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # --- ¡NUEVO! Descargar el modelo de voz ---
 # Esto descarga el modelo español que elegimos (css10/vits)
 # Se ejecuta UNA VEZ durante el deploy, para que el bot inicie rápido.
-RUN python -c "from tts.api import TTS; TTS(model_name='tts_models/es/css10/vits', progress_bar=True, gpu=False)"
-
+RUN python -c "from TTS.api import TTS; TTS(model_name='tts_models/es/css10/vits', progress_bar=True, gpu=False)"
 # Copiar el resto de la aplicación (app.py, video_generator.py, etc.)
 COPY . .
 
