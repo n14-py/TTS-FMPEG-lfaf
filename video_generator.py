@@ -46,6 +46,9 @@ def _report_status_to_api(endpoint, article_id, data={}):
         print(f"ERROR CALLBACK: {e}")
 
 # --- PASO 1: Generar Audio (CON PIPER) ---
+# ... después de la línea de comandos ...
+
+# --- PASO 1: Generar Audio (CON PIPER) ---
 def generar_audio(text):
     """Genera audio usando el motor ultraligero Piper."""
     print(f"Iniciando Paso 1: Generando audio con Piper ({PIPER_MODEL})...")
@@ -56,19 +59,22 @@ def generar_audio(text):
     command = [
         "piper",
         "--model", PIPER_MODEL,
-        "--output_file", AUDIO_PATH,
-        "--speaker", "default"
+        "--output_file", AUDIO_PATH
+        # ¡ELIMINADO: Ya NO se usa el argumento --speaker "default"!
     ]
     
     # 2. Ejecutamos el comando y enviamos el texto a través de stdin
     try:
+        # Usamos subprocess.run para mayor seguridad
         process = subprocess.run(command, input=text.encode('utf-8'), capture_output=True, check=True)
-        # Opcional: imprimir la salida de error de Piper para debug
+        
         if process.stderr:
-            print(f"Advertencia/Error de Piper: {process.stderr.decode('utf-8')}")
+            # Capturamos la advertencia normal de GPU, pero lanzamos error si es algo más
+            if "GPU device discovery failed" not in process.stderr.decode('utf-8'):
+                 print(f"Error/Advertencia de Piper: {process.stderr.decode('utf-8')}")
             
         if not os.path.exists(AUDIO_PATH):
-             raise Exception("Piper no generó el archivo de audio. ¿El modelo fue descargado correctamente?")
+             raise Exception("Piper no generó el archivo de audio. Verifique logs para el error real.")
              
     except subprocess.CalledProcessError as e:
         raise Exception(f"Error al ejecutar Piper: {e.stderr.decode('utf-8')}")
@@ -76,11 +82,9 @@ def generar_audio(text):
         raise Exception(f"Error al iniciar Piper: {e}")
 
     end_time = time.time()
-    # Ya no hay que limpiar memoria, Piper es eficiente
     print(f"Audio guardado (Tardó {end_time - start_time:.2f}s). ¡RAM limpia!")
     
     return AUDIO_PATH
-
 # --- PASO 2: Generar Video (1080p, 1 FPS) ---
 # ... (El resto de las funciones son iguales, solo las pego para completar el archivo) ...
 
