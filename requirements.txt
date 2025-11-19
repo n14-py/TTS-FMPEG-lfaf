@@ -1,5 +1,6 @@
 Flask
-TTS
+# REEMPLAZAMOS: TTS
+piper-tts
 requests
 python-dotenv
 google-api-python-client

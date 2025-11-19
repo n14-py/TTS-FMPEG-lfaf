@@ -1,9 +1,11 @@
 import os
 import time
 import requests 
-import gc 
+import subprocess # ¡NUEVO! Para llamar a Piper (tts)
 from dotenv import load_dotenv
-from TTS.api import TTS
+# ELIMINAMOS: from TTS.api import TTS
+# ELIMINAMOS: import gc (Ya no hace falta la limpieza de memoria)
+
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -14,19 +16,23 @@ load_dotenv()
 MAIN_API_URL = os.getenv("MAIN_API_URL")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 
-# --- ¡NUEVO! URL base del frontend para construir el enlace ---
 FRONTEND_BASE_URL = "https://noticias.lat"
 
 AUDIO_PATH = "temp_audio/news_audio.mp3"
 FINAL_VIDEO_PATH = "output/final_news_video.mp4"
+
+# --- MODELO PIPER ---
+# Este es el reemplazo ultraligero y de buena calidad para español
+PIPER_MODEL = "es_ES-karlen-low" 
 
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
 CLIENT_SECRETS_FILE = 'client_secrets.json' 
 
-# --- MODELO VITS ESTABLE ---
-NEW_TTS_MODEL = "tts_models/es/css10/vits" 
+print("Cargando motor TTS: Piper (Ultraligero)")
+
+# --- Funciones Auxiliares (sin cambios) ---
 
 def _report_status_to_api(endpoint, article_id, data={}):
     if not MAIN_API_URL or not ADMIN_API_KEY:
@@ -39,31 +45,49 @@ def _report_status_to_api(endpoint, article_id, data={}):
     except Exception as e:
         print(f"ERROR CALLBACK: {e}")
 
+# --- PASO 1: Generar Audio (CON PIPER) ---
 def generar_audio(text):
-    """Carga, genera audio con VITS, y libera la RAM."""
-    print(f"Iniciando Paso 1: Generando audio con {NEW_TTS_MODEL}...")
+    """Genera audio usando el motor ultraligero Piper."""
+    print(f"Iniciando Paso 1: Generando audio con Piper ({PIPER_MODEL})...")
     
+    start_time = time.time()
+    
+    # 1. Creamos el comando de Piper CLI
+    command = [
+        "piper",
+        "--model", PIPER_MODEL,
+        "--output_file", AUDIO_PATH,
+        "--speaker", "default"
+    ]
+    
+    # 2. Ejecutamos el comando y enviamos el texto a través de stdin
     try:
-        tts_model = TTS(model_name=NEW_TTS_MODEL, progress_bar=False, gpu=False) 
-        
-        start_time = time.time()
-        tts_model.tts_to_file(text=text, file_path=AUDIO_PATH) 
-        end_time = time.time()
-        
-        print(f"Audio guardado (Tardó {end_time - start_time:.2f}s)")
-        
-        del tts_model
-        gc.collect() 
-        print("Memoria RAM liberada (Modelo TTS eliminado).")
-        
-        return AUDIO_PATH
-        
+        process = subprocess.run(command, input=text.encode('utf-8'), capture_output=True, check=True)
+        # Opcional: imprimir la salida de error de Piper para debug
+        if process.stderr:
+            print(f"Advertencia/Error de Piper: {process.stderr.decode('utf-8')}")
+            
+        if not os.path.exists(AUDIO_PATH):
+             raise Exception("Piper no generó el archivo de audio. ¿El modelo fue descargado correctamente?")
+             
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Error al ejecutar Piper: {e.stderr.decode('utf-8')}")
     except Exception as e:
-        print(f"ERROR FATAL en TTS: {e}")
-        return None
+        raise Exception(f"Error al iniciar Piper: {e}")
+
+    end_time = time.time()
+    # Ya no hay que limpiar memoria, Piper es eficiente
+    print(f"Audio guardado (Tardó {end_time - start_time:.2f}s). ¡RAM limpia!")
+    
+    return AUDIO_PATH
+
+# --- PASO 2: Generar Video (1080p, 1 FPS) ---
+# ... (El resto de las funciones son iguales, solo las pego para completar el archivo) ...
 
 def generar_video_ia(audio_path, imagen_path):
-    """Genera video Horizontal 1080p a 1 FPS y 1 Hilo (Máx. Estabilidad)."""
+    """
+    Genera video Horizontal 1080p a 1 FPS y 1 Hilo (Máx. Estabilidad).
+    """
     print("Iniciando Paso 2: Generando video HORIZONTAL (1920x1080)...")
     
     ffmpeg_command = (
@@ -77,15 +101,15 @@ def generar_video_ia(audio_path, imagen_path):
     )
     
     try:
-        os.system(ffmpeg_command)
+        subprocess.run(ffmpeg_command, shell=True, check=True)
         print(f"Video guardado en {FINAL_VIDEO_PATH}")
         return FINAL_VIDEO_PATH
     except Exception as e:
         print(f"Error en ffmpeg: {e}")
         return None
 
-def subir_a_youtube(video_path, title, full_text, article_id): # <-- Recibe article_id
-    """Subida con Enlace Específico y Truncamiento de Descripción."""
+def subir_a_youtube(video_path, title, full_text, article_id):
+    """Subida con Título ULTRA SEGURO (Máx 98 caracteres) y Público"""
     print("Iniciando Paso 3: Subiendo a YouTube...")
     
     credentials = None
@@ -105,19 +129,18 @@ def subir_a_youtube(video_path, title, full_text, article_id): # <-- Recibe arti
     try:
         youtube = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
         
-        # --- 1. CONSTRUCCIÓN DE TÍTULO SEGURO ---
         suffix = " // Noticias.lat"
         max_total_length = 98 
         max_title_length = max_total_length - len(suffix) 
+        
         clean_title = title.strip()
+        
         if len(clean_title) > max_title_length:
             clean_title = clean_title[:max_title_length - 3].strip() + "..."
+            
         final_title = f"{clean_title}{suffix}"
         
-        # --- 2. CONSTRUCCIÓN DE DESCRIPCIÓN (ENLACE + TRUNCAMIENTO) ---
         article_link = f"{FRONTEND_BASE_URL}/articulo/{article_id}"
-        
-        # Truncamos el texto completo para dejar espacio al enlace (4700 caracteres)
         safe_text = full_text[:4700].strip()
         if len(full_text) > 4700:
             safe_text += "..."
@@ -161,17 +184,17 @@ def subir_a_youtube(video_path, title, full_text, article_id): # <-- Recibe arti
 def process_video_task(text_content, title, anchor_image_path, article_id):
     youtube_id = None
     try:
-        gc.collect()
-
-        # 1. Audio
+        # Ya no se necesita gc.collect() aquí
+        
+        # 1. Audio (Ahora con Piper)
         audio_file = generar_audio(text_content)
         if not audio_file: raise Exception("Falló audio")
 
-        # 2. Video
+        # 2. Video (Full HD 1080p)
         video_file = generar_video_ia(audio_file, anchor_image_path)
         if not video_file: raise Exception("Falló video")
 
-        # 3. Subida (PASAMOS EL ARTICLE_ID)
+        # 3. Subida
         youtube_id = subir_a_youtube(video_file, title, text_content, article_id)
         
         if not youtube_id: raise Exception("Falló subida")
@@ -187,4 +210,4 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
         print("Limpiando archivos...")
         if os.path.exists(AUDIO_PATH): os.remove(AUDIO_PATH)
         if os.path.exists(FINAL_VIDEO_PATH): os.remove(FINAL_VIDEO_PATH)
-        gc.collect()
+        # Ya no se necesita gc.collect() aquí
