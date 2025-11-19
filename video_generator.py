@@ -7,6 +7,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
+# --- ¡ESTA ES LA LÍNEA QUE FALTABA! ---
+from google.auth.transport.requests import Request 
 
 load_dotenv()
 MAIN_API_URL = os.getenv("MAIN_API_URL")
@@ -49,16 +51,11 @@ def generar_audio(text):
 
 def generar_video_ia(audio_path, imagen_path):
     """
-    Genera un VIDEO HORIZONTAL (Landscape) para YouTube (No Short).
+    Genera un VIDEO HORIZONTAL (Landscape) para YouTube.
     Resolución: 1280x720 (HD)
     FPS: 1 (Estático optimizado)
     """
     print("Iniciando Paso 2: Generando video HORIZONTAL (1280x720)...")
-    
-    # --- CAMBIO CLAVE: scale=1280:720 (Horizontal) ---
-    # scale=1280:720 -> HD Estándar (YouTube Video)
-    # force_original_aspect_ratio=decrease y pad -> Para que la imagen no se estire fea, 
-    # sino que se ajuste y ponga bordes negros si es necesario.
     
     ffmpeg_command = (
         f"ffmpeg -y -loop 1 -i \"{imagen_path}\" -i \"{audio_path}\" "
@@ -85,9 +82,11 @@ def subir_a_youtube(video_path, title, full_text):
     credentials = None
     if os.path.exists('token.json'):
         credentials = Credentials.from_authorized_user_file('token.json', SCOPES)
+    
     if not credentials or not credentials.valid:
         if credentials and credentials.expired and credentials.refresh_token:
-            credentials.refresh(Request())
+            print("Refrescando token de acceso...")
+            credentials.refresh(Request()) # <--- Aquí daba el error antes
         else:
             flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
             credentials = flow.run_local_server(port=0)
@@ -97,12 +96,10 @@ def subir_a_youtube(video_path, title, full_text):
     try:
         youtube = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
         
-        # --- TÍTULO Y DESCRIPCIÓN PERSONALIZADOS ---
+        # Título y Descripción
         final_title = f"{title} // Noticias.lat"
-        
-        # Cortamos la descripción si es demasiado larga (YouTube límite 5000 chars)
         safe_text = full_text[:4800] + "..." if len(full_text) > 4800 else full_text
-        final_description = f"www.noticias.lat\n\n{safe_text}"
+        final_description = f"Más en: www.noticias.lat\n\n{safe_text}"
 
         print(f"Título: {final_title}")
         
@@ -114,7 +111,7 @@ def subir_a_youtube(video_path, title, full_text):
                 'categoryId': '25' 
             },
             'status': {
-                'privacyStatus': 'public', # O 'public'
+                'privacyStatus': 'public', # Video Público
                 'selfDeclaredMadeForKids': False
             }
         }
@@ -141,11 +138,11 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
         audio_file = generar_audio(text_content)
         if not audio_file: raise Exception("Falló audio")
 
-        # 2. Video (Horizontal con imagen descargada)
+        # 2. Video
         video_file = generar_video_ia(audio_file, anchor_image_path)
         if not video_file: raise Exception("Falló video")
 
-        # 3. YouTube (Pasamos el texto completo para la descripción)
+        # 3. YouTube
         youtube_id = subir_a_youtube(video_file, title, text_content)
         
         if not youtube_id: raise Exception("Falló subida")
