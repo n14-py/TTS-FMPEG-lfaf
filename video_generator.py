@@ -1,10 +1,9 @@
 import os
 import time
 import requests 
-import subprocess # Para llamar a Piper (tts)
+import subprocess 
+import gc # IMPORTANTE: Traemos de vuelta el recolector de basura
 from dotenv import load_dotenv
-# ELIMINAMOS: import gc (Ya no hace falta la limpieza de memoria)
-# ELIMINAMOS: import torch (Ya no hace falta)
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -16,14 +15,14 @@ load_dotenv()
 MAIN_API_URL = os.getenv("MAIN_API_URL")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 
-FRONTEND_BASE_URL = "https://noticias.lat"
+FRONTEND_BASE_URL = "https://noticias.lat" # Sin slash al final para evitar dobles
 
 AUDIO_PATH = "temp_audio/news_audio.mp3"
 FINAL_VIDEO_PATH = "output/final_news_video.mp4"
 
 # --- MODELO PIPER ---
 PIPER_MODEL_NAME = "es_ES-carlfm-x_low"
-PIPER_MODEL_DIR = "/app/models/piper" # La ruta donde lo descargamos en Dockerfile
+PIPER_MODEL_DIR = "/app/models/piper" 
 
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 API_SERVICE_NAME = 'youtube'
@@ -32,7 +31,7 @@ CLIENT_SECRETS_FILE = 'client_secrets.json'
 
 print("Cargando motor TTS: Piper (Ultraligero)")
 
-# --- Funciones Auxiliares (sin cambios) ---
+# --- Funciones Auxiliares ---
 
 def _report_status_to_api(endpoint, article_id, data={}):
     if not MAIN_API_URL or not ADMIN_API_KEY:
@@ -45,33 +44,24 @@ def _report_status_to_api(endpoint, article_id, data={}):
     except Exception as e:
         print(f"ERROR CALLBACK: {e}")
 
-# --- PASO 1: Generar Audio (CON PIPER) ---
+# --- PASO 1: Generar Audio ---
 def generar_audio(text):
-    """Genera audio usando el motor ultraligero Piper."""
-    print(f"Iniciando Paso 1: Generando audio con Piper ({PIPER_MODEL_NAME})...")
-    
+    print(f"Iniciando Paso 1: Generando audio con Piper...")
     start_time = time.time()
     
-    # 1. Creamos el comando de Piper CLI, apuntando a los archivos descargados
     command = [
         "piper",
-        "--model", os.path.join(PIPER_MODEL_DIR, f"{PIPER_MODEL_NAME}.onnx"), # Ruta al archivo .onnx
-        "--config", os.path.join(PIPER_MODEL_DIR, f"{PIPER_MODEL_NAME}.onnx.json"), # Ruta al archivo .json
+        "--model", os.path.join(PIPER_MODEL_DIR, f"{PIPER_MODEL_NAME}.onnx"),
+        "--config", os.path.join(PIPER_MODEL_DIR, f"{PIPER_MODEL_NAME}.onnx.json"),
         "--output_file", AUDIO_PATH
     ]
     
-    # 2. Ejecutamos el comando
     try:
-        process = subprocess.run(command, input=text.encode('utf-8'), capture_output=True, check=True)
+        # Ejecutamos Piper. Al ser subprocess, la RAM se libera al terminar el proceso externo.
+        subprocess.run(command, input=text.encode('utf-8'), capture_output=True, check=True)
         
-        # Opcional: limpiar la advertencia normal de GPU
-        if process.stderr:
-            stderr_output = process.stderr.decode('utf-8')
-            if "GPU device discovery failed" not in stderr_output:
-                 print(f"Advertencia de Piper: {stderr_output}")
-            
         if not os.path.exists(AUDIO_PATH):
-             raise Exception("Piper no generó el archivo de audio. Verifique si el modelo fue descargado correctamente.")
+             raise Exception("Piper no generó el archivo de audio.")
              
     except subprocess.CalledProcessError as e:
         raise Exception(f"Error al ejecutar Piper: {e.stderr.decode('utf-8')}")
@@ -79,17 +69,16 @@ def generar_audio(text):
         raise Exception(f"Error al iniciar Piper: {e}")
 
     end_time = time.time()
-    print(f"Audio guardado (Tardó {end_time - start_time:.2f}s). ¡RAM limpia!")
-    
+    print(f"Audio guardado ({end_time - start_time:.2f}s).")
     return AUDIO_PATH
 
-# --- PASO 2: Generar Video (1080p, 1 FPS) ---
+# --- PASO 2: Generar Video ---
 def generar_video_ia(audio_path, imagen_path):
-    """
-    Genera video Horizontal 1080p a 1 FPS y 1 Hilo (Máx. Estabilidad).
-    """
-    print("Iniciando Paso 2: Generando video HORIZONTAL (1920x1080)...")
+    print("Iniciando Paso 2: Generando video HORIZONTAL (1080p)...")
     
+    # Optimizaciones para memoria:
+    # -threads 1: Usa menos CPU/RAM concurrente
+    # -preset ultrafast: Codifica rápido para liberar RAM antes
     ffmpeg_command = (
         f"ffmpeg -y -loop 1 -i \"{imagen_path}\" -i \"{audio_path}\" "
         f"-threads 1 -r 1 "
@@ -101,7 +90,6 @@ def generar_video_ia(audio_path, imagen_path):
     )
     
     try:
-        # Usamos subprocess.run para ejecutar el comando
         subprocess.run(ffmpeg_command, shell=True, check=True)
         print(f"Video guardado en {FINAL_VIDEO_PATH}")
         return FINAL_VIDEO_PATH
@@ -111,7 +99,6 @@ def generar_video_ia(audio_path, imagen_path):
 
 # --- PASO 3: Subir a YouTube ---
 def subir_a_youtube(video_path, title, full_text, article_id):
-    """Subida con Título ULTRA SEGURO (Máx 98 caracteres) y Público"""
     print("Iniciando Paso 3: Subiendo a YouTube...")
     
     credentials = None
@@ -120,7 +107,7 @@ def subir_a_youtube(video_path, title, full_text, article_id):
     
     if not credentials or not credentials.valid:
         if credentials and credentials.expired and credentials.refresh_token:
-            print("Refrescando token de acceso...")
+            print("Refrescando token...")
             credentials.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
@@ -131,31 +118,42 @@ def subir_a_youtube(video_path, title, full_text, article_id):
     try:
         youtube = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
         
-        # --- TÍTULO SEGURO ---
+        # --- TÍTULO SEGURO (Máx 100 chars) ---
         suffix = " // Noticias.lat"
-        max_total_length = 98 
-        max_title_length = max_total_length - len(suffix) 
-        
+        max_title_length = 98 - len(suffix) 
         clean_title = title.strip()
-        
         if len(clean_title) > max_title_length:
             clean_title = clean_title[:max_title_length - 3].strip() + "..."
-            
         final_title = f"{clean_title}{suffix}"
         
-        # --- DESCRIPCIÓN ---
+        # --- DESCRIPCIÓN OPTIMIZADA ---
+        # Estructura pedida:
+        # 1. Link noticia
+        # 2. Texto noticia
+        # 3. Link Home
+        
         article_link = f"{FRONTEND_BASE_URL}/articulo/{article_id}"
-        safe_text = full_text[:4700].strip()
-        if len(full_text) > 4700:
-            safe_text += "..."
+        home_link = "https://www.noticias.lat/"
+        
+        intro_line = f"Lee la noticia completa aquí: {article_link}"
+        outro_line = f"Visita nuestra web: {home_link}"
+        
+        # YouTube permite 5000 caracteres. Calculamos cuánto espacio queda para el texto.
+        # Reservamos unos 100 caracteres de buffer por seguridad.
+        reserved_chars = len(intro_line) + len(outro_line) + 100 
+        max_text_chars = 5000 - reserved_chars
+        
+        safe_text = full_text.strip()
+        if len(safe_text) > max_text_chars:
+            safe_text = safe_text[:max_text_chars].strip() + "..."
 
         final_description = (
-            f"Lee la noticia completa aquí: {article_link}\n"
-            f"----------------------------------------\n"
-            f"{safe_text}"
+            f"{intro_line}\n\n"
+            f"{safe_text}\n\n"
+            f"{outro_line}"
         )
         
-        print(f"Título Final ({len(final_title)} chars): {final_title}")
+        print(f"Longitud Descripción: {len(final_description)} caracteres.")
         
         request_body = {
             'snippet': {
@@ -178,8 +176,9 @@ def subir_a_youtube(video_path, title, full_text, article_id):
             media_body=media_file
         ).execute()
         
-        print(f"Video subido con éxito. ID: {response_upload['id']}")
-        return response_upload['id']
+        video_id = response_upload.get('id')
+        print(f"Video subido con éxito. ID: {video_id}")
+        return video_id
 
     except Exception as e:
         print(f"Error al subir a YouTube: {e}")
@@ -188,30 +187,42 @@ def subir_a_youtube(video_path, title, full_text, article_id):
 def process_video_task(text_content, title, anchor_image_path, article_id):
     youtube_id = None
     try:
-        # Ya no se necesita gc.collect() aquí, Piper es ligero
-        
-        # 1. Audio (Con Piper)
+        # 1. Audio
         audio_file = generar_audio(text_content)
         if not audio_file: raise Exception("Falló audio")
+        
+        # Limpieza post-audio
+        gc.collect()
 
-        # 2. Video (Full HD 1080p)
+        # 2. Video
         video_file = generar_video_ia(audio_file, anchor_image_path)
         if not video_file: raise Exception("Falló video")
+        
+        # Limpieza post-video (importante antes de subir para tener RAM libre para requests)
+        gc.collect()
 
         # 3. Subida
         youtube_id = subir_a_youtube(video_file, title, text_content, article_id)
-        
         if not youtube_id: raise Exception("Falló subida")
 
-        print(f"¡TRABAJO COMPLETO para {article_id}!")
+        print(f"✅ FINALIZADO CON ÉXITO: {article_id}")
         _report_status_to_api("video_complete", article_id, {"youtubeId": youtube_id})
 
     except Exception as e:
-        print(f"ERROR en proceso: {e}")
+        print(f"❌ FALLO: {e}")
         _report_status_to_api("video_failed", article_id, {"error": str(e)})
     
     finally:
-        print("Limpiando archivos...")
-        if os.path.exists(AUDIO_PATH): os.remove(AUDIO_PATH)
-        if os.path.exists(FINAL_VIDEO_PATH): os.remove(FINAL_VIDEO_PATH)
-        # Limpieza final de RAM
+        print("🧹 LIMPIEZA FINAL DE ARCHIVOS Y RAM...")
+        # Eliminar archivos
+        if os.path.exists(AUDIO_PATH): 
+            try: os.remove(AUDIO_PATH)
+            except: pass
+        if os.path.exists(FINAL_VIDEO_PATH): 
+            try: os.remove(FINAL_VIDEO_PATH)
+            except: pass
+        
+        # Forzar limpieza de memoria de Python
+        del text_content
+        del title
+        gc.collect()
