@@ -31,7 +31,7 @@ SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
 
-# --- CONFIGURACIÓN DE LAS 6 CUENTAS (ACTUALIZADO) ---
+# --- CONFIGURACIÓN DE LAS 6 CUENTAS ---
 ACCOUNTS = [
     {"id": 0, "name": "Principal",    "secret": "client_secret_0.json", "token": "token_0.json"},
     {"id": 1, "name": "NoticiasLat1", "secret": "client_secret_1.json", "token": "token_1.json"},
@@ -143,6 +143,7 @@ def resize_input_image(input_path, max_dim=1280):
         result = subprocess.run(probe_command, capture_output=True, text=True, check=True)
         width, height = map(int, result.stdout.strip().split('x'))
         
+        # Mantener el límite de 1280px para prevenir OOM Kill al cargar la imagen
         if width <= max_dim and height <= max_dim:
             _print_flush("✅ Imagen ya optimizada (o pequeña).")
             return input_path
@@ -188,9 +189,9 @@ def generar_audio(text):
     return AUDIO_PATH
 
 
-# --- PASO 2: Generar Video (FFMPEG EXTREMADAMENTE OPTIMIZADO: Estático con 2 Overlays) ---
+# --- PASO 2: Generar Video (FFMPEG EXTREMADAMENTE OPTIMIZADO: Estático con 4 Overlays + Outro) ---
 def generar_video_ia(audio_path, imagen_path):
-    _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, 720p, 1 FPS)...")
+    _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, Overlays Secuenciales)...")
     
     gc.collect() 
 
@@ -200,7 +201,14 @@ def generar_video_ia(audio_path, imagen_path):
 
     # --- RUTAS DE ASSETS ---
     IMAGE_OUTRO_PATH = os.path.join(ASSETS_DIR, "outro_final.png") 
-    IMAGE_SUBSCRIBE_PATH = os.path.join(ASSETS_DIR, "overlay_subscribe_like.png")
+    
+    # NUEVA CONFIGURACIÓN: 4 Overlays estáticos de 3 segundos cada uno
+    ASSETS_TIMING = [
+        {'path': os.path.join(ASSETS_DIR, "overlay_subscribe_like.png"), 'start': 0, 'end': 3}, 
+        {'path': os.path.join(ASSETS_DIR, "overlay_like.png"), 'start': 3, 'end': 6},      
+        {'path': os.path.join(ASSETS_DIR, "overlay_bell.png"), 'start': 6, 'end': 9},      
+        {'path': os.path.join(ASSETS_DIR, "overlay_comment.png"), 'start': 9, 'end': 12},   
+    ]
 
     # --- CONSTRUCCIÓN DINÁMICA DE INPUTS ---
     inputs = []
@@ -209,40 +217,51 @@ def generar_video_ia(audio_path, imagen_path):
     # Input 1: Audio
     inputs.append(f"-i \"{audio_path}\"")                
     
-    # 2. Agregar Overlay de Suscripción (INPUT 2)
-    has_subscribe = os.path.exists(IMAGE_SUBSCRIBE_PATH)
-    if has_subscribe:
-        inputs.append(f"-loop 1 -i \"{IMAGE_SUBSCRIBE_PATH}\"")
-        subscribe_idx = 2
-        
-    # 3. Agregar Outro Final (INPUT 3)
+    overlay_assets = []
+    next_idx = 2
+    
+    # 2. Agregar Overlays Temporales
+    for asset in ASSETS_TIMING:
+        if os.path.exists(asset['path']):
+            inputs.append(f"-loop 1 -i \"{asset['path']}\"")
+            overlay_assets.append({'idx': next_idx, 'start': asset['start'], 'end': asset['end']})
+            next_idx += 1
+            
+    # 3. Agregar Outro Final
     has_outro = os.path.exists(IMAGE_OUTRO_PATH) 
     if has_outro:
         inputs.append(f"-loop 1 -i \"{IMAGE_OUTRO_PATH}\"") 
-        outro_idx = 3
+        outro_idx = next_idx
 
-
-    # --- CADENA DE FILTROS (Mínima y Estática) ---
+    # --- CADENA DE FILTROS (Mínima, Sin Zoom/Crop) ---
     
-    # 1. Filtro Base (Escalar y CROP)
-    filter_chain = "[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1[bg];"
+    # 1. Filtro Base: Escalar y PAD para NO CROP (mantiene el aspecto y rellena con barras negras si es necesario)
+    filter_chain = (
+        "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,setsar=1,"
+        "pad=1280:720:(ow-iw)/2:(oh-ih)/2[bg];"
+    )
     last_stream = "[bg]"
-    
-    # 2. Aplicar el Overlay de Suscripción (Estático por 5 segundos)
-    if has_subscribe:
-        next_stream_name = "[v1]"
+    stream_counter = 1
+
+    # 2. Aplicar los Overlays Secuenciales
+    for asset in overlay_assets:
+        next_stream_name = f"[v{stream_counter}]"
         # Posición: (W-w)/2:100 (centrado horizontal, a 100px del borde superior)
-        # enable='lte(t,5)' -> Lo muestra si el tiempo (t) es menor o igual a 5 segundos.
         filter_chain += (
-            f"{last_stream}[{subscribe_idx}:v]overlay=(W-w)/2:100:enable='lte(t,5)'{next_stream_name};" 
+            f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:100:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
         )
         last_stream = next_stream_name
+        stream_counter += 1
 
-    # 3. Aplicar el Outro Final
+    # 3. Aplicar el Outro Final (También sin Crop/Zoom)
     if has_outro:
-        # enable='gte(t,outro_start_time)' -> Lo muestra si el tiempo (t) es mayor o igual al inicio del outro.
+        # Escalado y PAD para el Outro (Evita el zoom en el outro)
         filter_chain += (
-            f"{last_stream}[{outro_idx}:v]overlay=0:0:enable='gte(t,{outro_start_time})'[outv]"
+            f"[{outro_idx}:v]scale=1280:720:force_original_aspect_ratio=decrease,setsar=1,"
+            f"pad=1280:720:(ow-iw)/2:(oh-ih)/2[outro_scaled];"
+            
+            # Superposición del Outro escalado
+            f"{last_stream}[outro_scaled]overlay=0:0:enable='gte(t,{outro_start_time})'[outv]"
         )
         final_map_stream = "[outv]"
     else:
@@ -251,13 +270,13 @@ def generar_video_ia(audio_path, imagen_path):
         final_map_stream = last_stream
 
 
-    # COMANDO FINAL (Máxima Optimización)
+    # COMANDO FINAL (Máxima Optimización: crf 35, 1 FPS, 1 Hilo)
     cmd = (
         f"ffmpeg -y -hide_banner -loglevel error "
         f"{' '.join(inputs)} "
         f"-filter_complex \"{filter_chain}\" "
         f"-map \"{final_map_stream}\" -map 1:a "
-        # crf 35 es el ajuste más bajo en calidad, pero el más estable para entornos con poca RAM.
+        # crf 35 es ALTA compresión, la más estable para poca RAM.
         f"-c:v libx264 -preset ultrafast -crf 35 -r 1 -threads 1 " 
         f"-c:a aac -b:a 64k -ac 1 " 
         f"-pix_fmt yuv420p -shortest "
