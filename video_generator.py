@@ -226,7 +226,7 @@ def generar_video_ia(audio_path, imagen_path):
     # --- CADENA DE FILTROS (La más simple posible con overlays) ---
     
     # 1. Filtro Audio: Ralentizar 10%
-    filter_chain = "[1:a]atempo=0.9[audio_out];"
+    filter_chain = "[1:a]atempo=0.95[audio_out];"
     
     # 2. Filtro Video Base: Escalar y PAD para NO CROP 
     filter_chain += (
