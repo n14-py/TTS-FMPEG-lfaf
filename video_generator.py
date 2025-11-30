@@ -4,7 +4,7 @@ import requests
 import subprocess 
 import gc 
 import json
-import sys # <-- NECESARIO para _print_flush
+import sys
 from dotenv import load_dotenv
 
 from googleapiclient.discovery import build
@@ -21,7 +21,7 @@ FRONTEND_BASE_URL = "https://noticias.lat"
 
 AUDIO_PATH = "temp_audio/news_audio.mp3"
 FINAL_VIDEO_PATH = "output/final_news_video.mp4"
-ASSETS_DIR = "assets_video" # Directorio de las imágenes estáticas
+ASSETS_DIR = "assets_video" 
 
 # --- MODELO PIPER ---
 PIPER_MODEL_NAME = "es_ES-carlfm-x_low"
@@ -60,7 +60,7 @@ def _report_status_to_api(endpoint, article_id, data={}):
     except Exception as e:
         _print_flush(f"ERROR CALLBACK: {e}")
 
-# --- GESTIÓN DE ROTACIÓN DE CUENTAS ---
+# --- GESTIÓN DE ROTACIÓN DE CUENTAS (sin cambios) ---
 def get_next_account_index(current_index):
     return (current_index + 1) % len(ACCOUNTS)
 
@@ -101,7 +101,6 @@ def get_authenticated_service(account_idx):
                 _print_flush(f"❌ [Auth] Token inválido e irrecuperable para {account['name']}.")
                 return None
                 
-        # cache_discovery=False para ahorrar RAM y evitar problemas de inicialización
         return build(API_SERVICE_NAME, API_VERSION, credentials=creds, cache_discovery=False) 
     except Exception as e:
         _print_flush(f"❌ [Auth] Error en cuenta {account['id']}: {e}")
@@ -120,7 +119,7 @@ def get_audio_duration(file_path):
         _print_flush(f"⚠️ Error duración audio: {e}. Default 0.")
         return 0
 
-# --- Función CRÍTICA de Optimización de RAM ---
+# --- Función CRÍTICA de Optimización de RAM (sin cambios) ---
 def resize_input_image(input_path, max_dim=1280):
     """
     PRE-ESCALADO CRÍTICO: Reescala la imagen de fondo ANTES de que FFmpeg inicie
@@ -166,7 +165,7 @@ def resize_input_image(input_path, max_dim=1280):
         return input_path 
 
 
-# --- PASO 1: Generar Audio (PIPER) ---
+# --- PASO 1: Generar Audio (PIPER) (sin cambios) ---
 def generar_audio(text):
     _print_flush("🎙️ Generando audio (Piper)...")
     if os.path.exists(AUDIO_PATH): os.remove(AUDIO_PATH)
@@ -187,26 +186,12 @@ def generar_audio(text):
     return AUDIO_PATH
 
 
-# --- PASO 2: Generar Video (FFMPEG EXTREMADAMENTE OPTIMIZADO + Overlays + Crop) ---
+# --- PASO 2: Generar Video (FFMPEG EXTREMADAMENTE OPTIMIZADO: Solo imagen estática + Crop) ---
 def generar_video_ia(audio_path, imagen_path):
-    _print_flush("🎬 Generando video (FFmpeg, 720p, 1 FPS, Cropping)...")
+    _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, 720p, 1 FPS)...")
     
     # Limpieza de RAM antes de llamar a FFmpeg (CRÍTICO)
     gc.collect() 
-
-    audio_duration = get_audio_duration(audio_path)
-    # El Outro aparece 5 segundos antes del final
-    outro_start_time = max(0, audio_duration - 5) 
-
-    # --- RUTAS DE ASSETS (Definidas localmente) ---
-    IMAGE_OUTRO_PATH = os.path.join(ASSETS_DIR, "outro_final.png") 
-    
-    ASSETS_TIMING = [
-        {'path': os.path.join(ASSETS_DIR, "overlay_subscribe_like.png"), 'start': 1, 'end': 2}, 
-        {'path': os.path.join(ASSETS_DIR, "overlay_like.png"), 'start': 2, 'end': 3},      
-        {'path': os.path.join(ASSETS_DIR, "overlay_bell.png"), 'start': 3, 'end': 4},      
-        {'path': os.path.join(ASSETS_DIR, "overlay_comment.png"), 'start': 4, 'end': 5},   
-    ]
 
     # --- CONSTRUCCIÓN DINÁMICA DE INPUTS ---
     inputs = []
@@ -214,59 +199,24 @@ def generar_video_ia(audio_path, imagen_path):
     inputs.append(f"-loop 1 -i \"{imagen_path}\"")       
     # Input 1: Audio
     inputs.append(f"-i \"{audio_path}\"")                
-    
-    overlay_assets = []
-    next_idx = 2
-    
-    # 2. Agregar Overlays Temporales
-    for asset in ASSETS_TIMING:
-        if os.path.exists(asset['path']):
-            inputs.append(f"-loop 1 -i \"{asset['path']}\"")
-            overlay_assets.append({'idx': next_idx, 'start': asset['start'], 'end': asset['end']})
-            next_idx += 1
-            
-    # 3. Agregar Outro Final
-    has_outro = os.path.exists(IMAGE_OUTRO_PATH) 
-    if has_outro:
-        inputs.append(f"-loop 1 -i \"{IMAGE_OUTRO_PATH}\"") 
-        outro_idx = next_idx
 
-    # --- CADENA DE FILTROS ---
-    
+    # --- CADENA DE FILTROS (Mínima y Estática) ---
     # 1. Filtro Base (Escalar y CROP para ELIMINAR BARRAS NEGRAS)
     # scale=...increase -> FUERZA a que la imagen llene el cuadro 1280x720, cortando los bordes
     # crop=1280:720 -> Se asegura que la imagen de fondo siempre sea exactamente 1280x720
-    filter_chain = "[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1[bg];"
-    last_stream = "[bg]"
-    stream_counter = 1
-
-    # 2. Aplicar los Overlays Temporales
-    for asset in overlay_assets:
-        next_stream_name = f"[v{stream_counter}]"
-        # Posición: (W-w)/2:100 (centrado horizontal, a 100px del borde superior)
-        filter_chain += (
-            f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:100:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
-        )
-        last_stream = next_stream_name
-        stream_counter += 1
-
-    # 3. Aplicar el Outro Final
-    if has_outro:
-        filter_chain += (
-            f"{last_stream}[{outro_idx}:v]overlay=0:0:enable='gte(t,{outro_start_time})'[outv]"
-        )
-        final_map_stream = "[outv]"
-    else:
-        final_map_stream = last_stream
+    # Todo se dirige a [outv]
+    filter_chain = "[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1[outv]"
+    final_map_stream = "[outv]"
 
 
-    # COMANDO FINAL (Optimización Extrema de Render: ultrafast, crf 28, 1 FPS, 1 Hilo)
+    # COMANDO FINAL (Optimización Extrema de Render: ultrafast, crf 35, 1 FPS, 1 Hilo)
+    # crf 35 es ALTA compresión/BAJA calidad, pero el menor uso de RAM/CPU.
     cmd = (
         f"ffmpeg -y -hide_banner -loglevel error "
         f"{' '.join(inputs)} "
         f"-filter_complex \"{filter_chain}\" "
         f"-map \"{final_map_stream}\" -map 1:a "
-        f"-c:v libx264 -preset ultrafast -tune animation -crf 28 -r 1 -threads 1 " 
+        f"-c:v libx264 -preset ultrafast -crf 35 -r 1 -threads 1 " # Eliminamos -tune animation. Usamos crf 35.
         f"-c:a aac -b:a 64k -ac 1 " 
         f"-pix_fmt yuv420p -shortest "
         f"\"{FINAL_VIDEO_PATH}\""
@@ -276,7 +226,7 @@ def generar_video_ia(audio_path, imagen_path):
     _print_flush("✅ Video guardado.")
     return FINAL_VIDEO_PATH
 
-# --- PASO 3: Subir a YouTube (Original) ---
+# --- PASO 3: Subir a YouTube (sin cambios) ---
 def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
     _print_flush("Iniciando Paso 3: Subiendo a YouTube con Rotación de Cuentas...")
     
@@ -294,7 +244,7 @@ def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
         
         if youtube:
             try:
-                # --- LÓGICA DE TÍTULO Y DESCRIPCIÓN (Original Restaurada) ---
+                # --- LÓGICA DE TÍTULO Y DESCRIPCIÓN ---
                 suffix = " // Noticias.lat"
                 max_title_length = 98 - len(suffix) 
                 clean_title = title.strip()
@@ -369,12 +319,12 @@ def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
 
     raise Exception("❌ TODAS las cuentas han fallado o están sin cuota.")
 
-# --- PROCESO PRINCIPAL (Modificado para usar resize_input_image y limpiar) ---
+# --- PROCESO PRINCIPAL (sin cambios) ---
 def process_video_task(text_content, title, anchor_image_path, article_id):
     youtube_id = None
     audio_file = None
     video_file = None
-    optimized_img_path = anchor_image_path # Inicializamos al original
+    optimized_img_path = anchor_image_path 
 
     try:
         _print_flush("--------------------------------------------------")
@@ -388,18 +338,17 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
         _print_flush("1/3 Completado. Forzando limpieza de Piper.")
         gc.collect()
 
-        # 1.5. OPTIMIZACIÓN DE IMAGEN (NUEVO PASO CRÍTICO DE RAM)
+        # 1.5. OPTIMIZACIÓN DE IMAGEN (El pre-escalado de RAM se mantiene)
         optimized_img_path = resize_input_image(anchor_image_path)
         
-        # 2. Video
-        # Usamos la imagen ya optimizada
+        # 2. Video (USA LA FUNCIÓN EXTREMADAMENTE OPTIMIZADA)
         video_file = generar_video_ia(audio_file, optimized_img_path) 
         if not video_file: raise Exception("Falló video")
         
         _print_flush("2/3 Completado. Forzando limpieza de FFmpeg.")
         gc.collect()
 
-        # 3. Subida (USANDO EL NUEVO SISTEMA ROTATIVO)
+        # 3. Subida
         youtube_id = subir_a_youtube_rotativo(video_file, title, text_content, article_id)
         if not youtube_id: raise Exception("Falló subida")
 
