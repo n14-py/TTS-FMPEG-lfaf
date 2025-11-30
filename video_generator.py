@@ -189,18 +189,14 @@ def generar_audio(text):
     return AUDIO_PATH
 
 
-# --- PASO 2: Generar Video (FFMPEG EXTREMADAMENTE OPTIMIZADO: Estático con 4 Overlays + Outro) ---
+# --- PASO 2: Generar Video (FFMPEG MÁXIMA OPTIMIZACIÓN - OUTRO ELIMINADO) ---
 def generar_video_ia(audio_path, imagen_path):
-    _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, Overlays Secuenciales)...")
+    _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, Overlays Secuenciales, SIN Outro)...")
     
     gc.collect() 
 
-    audio_duration = get_audio_duration(audio_path)
-    # El Outro aparece 5 segundos antes del final
-    outro_start_time = max(0, audio_duration - 5) 
-
     # --- RUTAS DE ASSETS ---
-    IMAGE_OUTRO_PATH = os.path.join(ASSETS_DIR, "outro_final.png") 
+    # Se ignora IMAGE_OUTRO_PATH para simplificar el filtro.
     
     # 4 Overlays estáticos de 3 segundos cada uno
     ASSETS_TIMING = [
@@ -227,15 +223,14 @@ def generar_video_ia(audio_path, imagen_path):
             overlay_assets.append({'idx': next_idx, 'start': asset['start'], 'end': asset['end']})
             next_idx += 1
             
-    # 3. Agregar Outro Final
-    has_outro = os.path.exists(IMAGE_OUTRO_PATH) 
-    if has_outro:
-        inputs.append(f"-loop 1 -i \"{IMAGE_OUTRO_PATH}\"") 
-        outro_idx = next_idx
+    # El Outro Final se ELIMINA para máxima estabilidad
+    has_outro = False # Forzado a False
+    outro_idx = 0
 
-    # --- CADENA DE FILTROS (Mínima, Sin Zoom/Crop) ---
+
+    # --- CADENA DE FILTROS (La más simple posible con overlays) ---
     
-    # 1. Filtro Base: Escalar y PAD para NO CROP 
+    # 1. Filtro Base: Escalar y PAD para NO CROP (mantiene el aspecto y rellena con barras negras si es necesario)
     filter_chain = (
         "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,setsar=1,"
         "pad=1280:720:(ow-iw)/2:(oh-ih)/2[bg];"
@@ -253,21 +248,9 @@ def generar_video_ia(audio_path, imagen_path):
         last_stream = next_stream_name
         stream_counter += 1
 
-    # 3. Aplicar el Outro Final (También sin Crop/Zoom)
-    if has_outro:
-        # Escalado y PAD para el Outro (Evita el zoom en el outro)
-        filter_chain += (
-            f"[{outro_idx}:v]scale=1280:720:force_original_aspect_ratio=decrease,setsar=1,"
-            f"pad=1280:720:(ow-iw)/2:(oh-ih)/2[outro_scaled];"
-            
-            # Superposición del Outro escalado
-            f"{last_stream}[outro_scaled]overlay=0:0:enable='gte(t,{outro_start_time})'[outv]"
-        )
-        final_map_stream = "[outv]"
-    else:
-        # Si no hay outro, el stream final es el último que se procesó
-        filter_chain = filter_chain.rstrip(';')
-        final_map_stream = last_stream
+    # El stream final es el último que se procesó
+    filter_chain = filter_chain.rstrip(';') # Eliminar el último ';' si no hay outro
+    final_map_stream = last_stream
 
 
     # COMANDO FINAL (Máxima Optimización)
@@ -280,7 +263,7 @@ def generar_video_ia(audio_path, imagen_path):
         f"-c:v libx264 -preset ultrafast -tune stillimage -crf 40 -r 1 -threads 1 " 
         f"-c:a aac -b:a 32k -ac 1 " 
         f"-pix_fmt yuv420p -shortest "
-        f"-max_muxing_queue_size 1024 " # <-- CORREGIDO: Opción de salida al final
+        f"-max_muxing_queue_size 1024 " # <-- Opción de salida al final (CORRECTO)
         f"\"{FINAL_VIDEO_PATH}\""
     )
     
