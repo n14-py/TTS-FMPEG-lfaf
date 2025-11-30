@@ -31,19 +31,21 @@ SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
 
-# --- CONFIGURACIÓN DE LAS 4 CUENTAS ---
+# --- CONFIGURACIÓN DE LAS 6 CUENTAS (ACTUALIZADO) ---
 ACCOUNTS = [
     {"id": 0, "name": "Principal",    "secret": "client_secret_0.json", "token": "token_0.json"},
     {"id": 1, "name": "NoticiasLat1", "secret": "client_secret_1.json", "token": "token_1.json"},
     {"id": 2, "name": "NoticiasLat2", "secret": "client_secret_2.json", "token": "token_2.json"},
-    {"id": 3, "name": "NoticiasLat3", "secret": "client_secret_3.json", "token": "token_3.json"}
+    {"id": 3, "name": "NoticiasLat3", "secret": "client_secret_3.json", "token": "token_3.json"},
+    {"id": 4, "name": "NoticiasLat4", "secret": "client_secret_4.json", "token": "token_4.json"},
+    {"id": 5, "name": "NoticiasLat5", "secret": "client_secret_5.json", "token": "token_5.json"}
 ]
 
 LAST_ACCOUNT_FILE = "last_account_used.txt"
 
 print("Cargando motor TTS: Piper (Ultraligero) y Sistema Multi-Cuenta")
 
-# --- Funciones Auxiliares ---
+# --- Funciones Auxiliares (sin cambios) ---
 
 def _print_flush(message):
     print(message)
@@ -151,7 +153,7 @@ def resize_input_image(input_path, max_dim=1280):
         scale_command = [
             "ffmpeg", "-y", "-i", input_path, 
             "-vf", f"scale='min({max_dim},iw)':'min({max_dim},ih)'", 
-            "-q:v", "5", resized_path # -q:v 5 es buena calidad/compresión
+            "-q:v", "5", resized_path 
         ]
         subprocess.run(scale_command, check=True, stderr=subprocess.DEVNULL)
         
@@ -186,12 +188,19 @@ def generar_audio(text):
     return AUDIO_PATH
 
 
-# --- PASO 2: Generar Video (FFMPEG EXTREMADAMENTE OPTIMIZADO: Solo imagen estática + Crop) ---
+# --- PASO 2: Generar Video (FFMPEG EXTREMADAMENTE OPTIMIZADO: Estático con 2 Overlays) ---
 def generar_video_ia(audio_path, imagen_path):
     _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, 720p, 1 FPS)...")
     
-    # Limpieza de RAM antes de llamar a FFmpeg (CRÍTICO)
     gc.collect() 
+
+    audio_duration = get_audio_duration(audio_path)
+    # El Outro aparece 5 segundos antes del final
+    outro_start_time = max(0, audio_duration - 5) 
+
+    # --- RUTAS DE ASSETS ---
+    IMAGE_OUTRO_PATH = os.path.join(ASSETS_DIR, "outro_final.png") 
+    IMAGE_SUBSCRIBE_PATH = os.path.join(ASSETS_DIR, "overlay_subscribe_like.png")
 
     # --- CONSTRUCCIÓN DINÁMICA DE INPUTS ---
     inputs = []
@@ -199,24 +208,57 @@ def generar_video_ia(audio_path, imagen_path):
     inputs.append(f"-loop 1 -i \"{imagen_path}\"")       
     # Input 1: Audio
     inputs.append(f"-i \"{audio_path}\"")                
+    
+    # 2. Agregar Overlay de Suscripción (INPUT 2)
+    has_subscribe = os.path.exists(IMAGE_SUBSCRIBE_PATH)
+    if has_subscribe:
+        inputs.append(f"-loop 1 -i \"{IMAGE_SUBSCRIBE_PATH}\"")
+        subscribe_idx = 2
+        
+    # 3. Agregar Outro Final (INPUT 3)
+    has_outro = os.path.exists(IMAGE_OUTRO_PATH) 
+    if has_outro:
+        inputs.append(f"-loop 1 -i \"{IMAGE_OUTRO_PATH}\"") 
+        outro_idx = 3
+
 
     # --- CADENA DE FILTROS (Mínima y Estática) ---
-    # 1. Filtro Base (Escalar y CROP para ELIMINAR BARRAS NEGRAS)
-    # scale=...increase -> FUERZA a que la imagen llene el cuadro 1280x720, cortando los bordes
-    # crop=1280:720 -> Se asegura que la imagen de fondo siempre sea exactamente 1280x720
-    # Todo se dirige a [outv]
-    filter_chain = "[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1[outv]"
-    final_map_stream = "[outv]"
+    
+    # 1. Filtro Base (Escalar y CROP)
+    filter_chain = "[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1[bg];"
+    last_stream = "[bg]"
+    
+    # 2. Aplicar el Overlay de Suscripción (Estático por 5 segundos)
+    if has_subscribe:
+        next_stream_name = "[v1]"
+        # Posición: (W-w)/2:100 (centrado horizontal, a 100px del borde superior)
+        # enable='lte(t,5)' -> Lo muestra si el tiempo (t) es menor o igual a 5 segundos.
+        filter_chain += (
+            f"{last_stream}[{subscribe_idx}:v]overlay=(W-w)/2:100:enable='lte(t,5)'{next_stream_name};" 
+        )
+        last_stream = next_stream_name
+
+    # 3. Aplicar el Outro Final
+    if has_outro:
+        # enable='gte(t,outro_start_time)' -> Lo muestra si el tiempo (t) es mayor o igual al inicio del outro.
+        filter_chain += (
+            f"{last_stream}[{outro_idx}:v]overlay=0:0:enable='gte(t,{outro_start_time})'[outv]"
+        )
+        final_map_stream = "[outv]"
+    else:
+        # Si no hay outro, el stream final es el último que se procesó
+        filter_chain = filter_chain.rstrip(';')
+        final_map_stream = last_stream
 
 
-    # COMANDO FINAL (Optimización Extrema de Render: ultrafast, crf 35, 1 FPS, 1 Hilo)
-    # crf 35 es ALTA compresión/BAJA calidad, pero el menor uso de RAM/CPU.
+    # COMANDO FINAL (Máxima Optimización)
     cmd = (
         f"ffmpeg -y -hide_banner -loglevel error "
         f"{' '.join(inputs)} "
         f"-filter_complex \"{filter_chain}\" "
         f"-map \"{final_map_stream}\" -map 1:a "
-        f"-c:v libx264 -preset ultrafast -crf 35 -r 1 -threads 1 " # Eliminamos -tune animation. Usamos crf 35.
+        # crf 35 es el ajuste más bajo en calidad, pero el más estable para entornos con poca RAM.
+        f"-c:v libx264 -preset ultrafast -crf 35 -r 1 -threads 1 " 
         f"-c:a aac -b:a 64k -ac 1 " 
         f"-pix_fmt yuv420p -shortest "
         f"\"{FINAL_VIDEO_PATH}\""
@@ -338,10 +380,10 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
         _print_flush("1/3 Completado. Forzando limpieza de Piper.")
         gc.collect()
 
-        # 1.5. OPTIMIZACIÓN DE IMAGEN (El pre-escalado de RAM se mantiene)
+        # 1.5. OPTIMIZACIÓN DE IMAGEN
         optimized_img_path = resize_input_image(anchor_image_path)
         
-        # 2. Video (USA LA FUNCIÓN EXTREMADAMENTE OPTIMIZADA)
+        # 2. Video
         video_file = generar_video_ia(audio_file, optimized_img_path) 
         if not video_file: raise Exception("Falló video")
         
@@ -377,7 +419,5 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
             try: os.remove(optimized_img_path)
             except: pass
             
-        # La imagen ORIGINAL (anchor_image_path) la elimina el app.py
-        
         _print_flush("✨ Limpieza de RAM completa. Sistema listo.")
         gc.collect()
