@@ -45,7 +45,7 @@ LAST_ACCOUNT_FILE = "last_account_used.txt"
 
 print("Cargando motor TTS: Piper (Ultraligero) y Sistema Multi-Cuenta")
 
-# --- Funciones Auxiliares ---
+# --- Funciones Auxiliares (sin cambios) ---
 
 def _print_flush(message):
     print(message)
@@ -191,19 +191,16 @@ def generar_audio(text):
 
 # --- PASO 2: Generar Video (FFMPEG MÁXIMA OPTIMIZACIÓN - OUTRO ELIMINADO) ---
 def generar_video_ia(audio_path, imagen_path):
-    _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, Overlays Secuenciales, SIN Outro)...")
+    _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, Overlays Secuenciales)...")
     
     gc.collect() 
 
-    # --- RUTAS DE ASSETS ---
-    # Se ignora IMAGE_OUTRO_PATH para simplificar el filtro.
-    
-    # 4 Overlays estáticos de 3 segundos cada uno
+    # 4 Overlays estáticos de 3 segundos cada uno. INICIO en segundo 1.
     ASSETS_TIMING = [
-        {'path': os.path.join(ASSETS_DIR, "overlay_subscribe_like.png"), 'start': 0, 'end': 3}, 
-        {'path': os.path.join(ASSETS_DIR, "overlay_like.png"), 'start': 3, 'end': 6},      
-        {'path': os.path.join(ASSETS_DIR, "overlay_bell.png"), 'start': 6, 'end': 9},      
-        {'path': os.path.join(ASSETS_DIR, "overlay_comment.png"), 'start': 9, 'end': 12},   
+        {'path': os.path.join(ASSETS_DIR, "overlay_subscribe_like.png"), 'start': 1, 'end': 4}, 
+        {'path': os.path.join(ASSETS_DIR, "overlay_like.png"), 'start': 4, 'end': 7},      
+        {'path': os.path.join(ASSETS_DIR, "overlay_bell.png"), 'start': 7, 'end': 10},      
+        {'path': os.path.join(ASSETS_DIR, "overlay_comment.png"), 'start': 10, 'end': 13},   
     ]
 
     # --- CONSTRUCCIÓN DINÁMICA DE INPUTS ---
@@ -225,45 +222,46 @@ def generar_video_ia(audio_path, imagen_path):
             
     # El Outro Final se ELIMINA para máxima estabilidad
     has_outro = False # Forzado a False
-    outro_idx = 0
-
 
     # --- CADENA DE FILTROS (La más simple posible con overlays) ---
     
-    # 1. Filtro Base: Escalar y PAD para NO CROP (mantiene el aspecto y rellena con barras negras si es necesario)
-    filter_chain = (
+    # 1. Filtro Audio: Ralentizar 10%
+    filter_chain = "[1:a]atempo=0.9[audio_out];"
+    
+    # 2. Filtro Video Base: Escalar y PAD para NO CROP 
+    filter_chain += (
         "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,setsar=1,"
         "pad=1280:720:(ow-iw)/2:(oh-ih)/2[bg];"
     )
     last_stream = "[bg]"
     stream_counter = 1
 
-    # 2. Aplicar los Overlays Secuenciales
+    # 3. Aplicar los Overlays Secuenciales
     for asset in overlay_assets:
         next_stream_name = f"[v{stream_counter}]"
-        # Posición: (W-w)/2:100 (centrado horizontal, a 100px del borde superior)
+        # Posición: (W-w)/2:30 (centrado horizontal, a 30px del borde superior - más alto)
         filter_chain += (
-            f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:100:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
+            f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:30:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
         )
         last_stream = next_stream_name
         stream_counter += 1
 
     # El stream final es el último que se procesó
-    filter_chain = filter_chain.rstrip(';') # Eliminar el último ';' si no hay outro
+    filter_chain = filter_chain.rstrip(';') # Eliminar el último ';'
     final_map_stream = last_stream
 
 
-    # COMANDO FINAL (Máxima Optimización)
+    # COMANDO FINAL (Máxima Optimización con CRF 42 y Audio 24k)
     cmd = (
         f"ffmpeg -y -hide_banner -loglevel error "
         f"{' '.join(inputs)} "
         f"-filter_complex \"{filter_chain}\" "
-        f"-map \"{final_map_stream}\" -map 1:a "
-        # Optimizaciones x264: tune stillimage, crf 40, threads 1
-        f"-c:v libx264 -preset ultrafast -tune stillimage -crf 40 -r 1 -threads 1 " 
-        f"-c:a aac -b:a 32k -ac 1 " 
+        f"-map \"{final_map_stream}\" -map [audio_out] " # <--- Mapeo al nuevo stream de audio
+        # Optimizaciones x264: tune stillimage, crf 42 (compresión extrema)
+        f"-c:v libx264 -preset ultrafast -tune stillimage -crf 42 -r 1 -threads 1 " 
+        f"-c:a aac -b:a 24k -ac 1 " # <--- Audio más ligero (24k)
         f"-pix_fmt yuv420p -shortest "
-        f"-max_muxing_queue_size 1024 " # <-- Opción de salida al final (CORRECTO)
+        f"-max_muxing_queue_size 1024 " 
         f"\"{FINAL_VIDEO_PATH}\""
     )
     
