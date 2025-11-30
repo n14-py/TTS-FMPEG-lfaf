@@ -240,9 +240,9 @@ def generar_video_ia(audio_path, imagen_path):
     for asset in overlay_assets:
         next_stream_name = f"[v{stream_counter}]"
         
-        # Posición: (W-w)/2:10 (centrado horizontal, a 10px del borde superior)
+        # Posición: (W-w)/2:3 (centrado horizontal, a 3px del borde superior - casi tocando el techo)
         filter_chain += (
-            f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:10:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
+            f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:3:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
         )
         last_stream = next_stream_name
         stream_counter += 1
