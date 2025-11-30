@@ -239,9 +239,10 @@ def generar_video_ia(audio_path, imagen_path):
     # 3. Aplicar los Overlays Secuenciales
     for asset in overlay_assets:
         next_stream_name = f"[v{stream_counter}]"
-        # Posición: (W-w)/2:30 (centrado horizontal, a 30px del borde superior - más alto)
+        
+        # Posición: (W-w)/2:10 (centrado horizontal, a 10px del borde superior)
         filter_chain += (
-            f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:30:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
+            f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:10:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
         )
         last_stream = next_stream_name
         stream_counter += 1
