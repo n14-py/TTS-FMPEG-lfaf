@@ -31,7 +31,7 @@ SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
 
-# --- CONFIGURACIÓN DE LAS 6 CUENTAS ---
+# --- CONFIGURACIÓN DE LAS 6 CUENTAS (ACTUALIZADO) ---
 ACCOUNTS = [
     {"id": 0, "name": "Principal",    "secret": "client_secret_0.json", "token": "token_0.json"},
     {"id": 1, "name": "NoticiasLat1", "secret": "client_secret_1.json", "token": "token_1.json"},
@@ -45,7 +45,7 @@ LAST_ACCOUNT_FILE = "last_account_used.txt"
 
 print("Cargando motor TTS: Piper (Ultraligero) y Sistema Multi-Cuenta")
 
-# --- Funciones Auxiliares (sin cambios) ---
+# --- Funciones Auxiliares ---
 
 def _print_flush(message):
     print(message)
@@ -270,15 +270,15 @@ def generar_video_ia(audio_path, imagen_path):
         final_map_stream = last_stream
 
 
-    # COMANDO FINAL (Máxima Optimización: crf 35, 1 FPS, 1 Hilo)
+    # COMANDO FINAL (Máxima Optimización: crf 40, tune stillimage, 32k audio)
     cmd = (
-        f"ffmpeg -y -hide_banner -loglevel error "
+        f"ffmpeg -y -hide_banner -loglevel error -max_muxing_queue_size 1024 " # <-- Estabilidad y Muxing
         f"{' '.join(inputs)} "
         f"-filter_complex \"{filter_chain}\" "
         f"-map \"{final_map_stream}\" -map 1:a "
-        # crf 35 es ALTA compresión, la más estable para poca RAM.
-        f"-c:v libx264 -preset ultrafast -crf 35 -r 1 -threads 1 " 
-        f"-c:a aac -b:a 64k -ac 1 " 
+        # Optimizaciones x264: tune stillimage, crf 40 (calidad mínima para máxima eficiencia)
+        f"-c:v libx264 -preset ultrafast -tune stillimage -crf 40 -r 1 -threads 1 " 
+        f"-c:a aac -b:a 32k -ac 1 " # <-- Audio más ligero
         f"-pix_fmt yuv420p -shortest "
         f"\"{FINAL_VIDEO_PATH}\""
     )
