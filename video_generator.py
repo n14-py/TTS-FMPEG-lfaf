@@ -31,7 +31,7 @@ SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
 
-# --- CONFIGURACIÓN DE LAS 6 CUENTAS (ACTUALIZADO) ---
+# --- CONFIGURACIÓN DE LAS 6 CUENTAS ---
 ACCOUNTS = [
     {"id": 0, "name": "Principal",    "secret": "client_secret_0.json", "token": "token_0.json"},
     {"id": 1, "name": "NoticiasLat1", "secret": "client_secret_1.json", "token": "token_1.json"},
@@ -202,7 +202,7 @@ def generar_video_ia(audio_path, imagen_path):
     # --- RUTAS DE ASSETS ---
     IMAGE_OUTRO_PATH = os.path.join(ASSETS_DIR, "outro_final.png") 
     
-    # NUEVA CONFIGURACIÓN: 4 Overlays estáticos de 3 segundos cada uno
+    # 4 Overlays estáticos de 3 segundos cada uno
     ASSETS_TIMING = [
         {'path': os.path.join(ASSETS_DIR, "overlay_subscribe_like.png"), 'start': 0, 'end': 3}, 
         {'path': os.path.join(ASSETS_DIR, "overlay_like.png"), 'start': 3, 'end': 6},      
@@ -235,7 +235,7 @@ def generar_video_ia(audio_path, imagen_path):
 
     # --- CADENA DE FILTROS (Mínima, Sin Zoom/Crop) ---
     
-    # 1. Filtro Base: Escalar y PAD para NO CROP (mantiene el aspecto y rellena con barras negras si es necesario)
+    # 1. Filtro Base: Escalar y PAD para NO CROP 
     filter_chain = (
         "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,setsar=1,"
         "pad=1280:720:(ow-iw)/2:(oh-ih)/2[bg];"
@@ -270,16 +270,17 @@ def generar_video_ia(audio_path, imagen_path):
         final_map_stream = last_stream
 
 
-    # COMANDO FINAL (Máxima Optimización: crf 40, tune stillimage, 32k audio)
+    # COMANDO FINAL (Máxima Optimización)
     cmd = (
-        f"ffmpeg -y -hide_banner -loglevel error -max_muxing_queue_size 1024 " # <-- Estabilidad y Muxing
+        f"ffmpeg -y -hide_banner -loglevel error "
         f"{' '.join(inputs)} "
         f"-filter_complex \"{filter_chain}\" "
         f"-map \"{final_map_stream}\" -map 1:a "
-        # Optimizaciones x264: tune stillimage, crf 40 (calidad mínima para máxima eficiencia)
+        # Optimizaciones x264: tune stillimage, crf 40, threads 1
         f"-c:v libx264 -preset ultrafast -tune stillimage -crf 40 -r 1 -threads 1 " 
-        f"-c:a aac -b:a 32k -ac 1 " # <-- Audio más ligero
+        f"-c:a aac -b:a 32k -ac 1 " 
         f"-pix_fmt yuv420p -shortest "
+        f"-max_muxing_queue_size 1024 " # <-- CORREGIDO: Opción de salida al final
         f"\"{FINAL_VIDEO_PATH}\""
     )
     
