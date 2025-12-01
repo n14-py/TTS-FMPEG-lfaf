@@ -43,9 +43,9 @@ ACCOUNTS = [
 
 LAST_ACCOUNT_FILE = "last_account_used.txt"
 
-print("Cargando motor TTS: Piper (Ultraligero) y Sistema Multi-Cuenta")
+print("Cargando motor TTS: Piper (Ultraligero) y Sistema Multi-Cuenta Optimizado")
 
-# --- Funciones Auxiliares (sin cambios) ---
+# --- Funciones Auxiliares ---
 
 def _print_flush(message):
     print(message)
@@ -62,7 +62,7 @@ def _report_status_to_api(endpoint, article_id, data={}):
     except Exception as e:
         _print_flush(f"ERROR CALLBACK: {e}")
 
-# --- GESTIÓN DE ROTACIÓN DE CUENTAS (sin cambios) ---
+# --- GESTIÓN DE ROTACIÓN DE CUENTAS ---
 def get_next_account_index(current_index):
     return (current_index + 1) % len(ACCOUNTS)
 
@@ -108,34 +108,17 @@ def get_authenticated_service(account_idx):
         _print_flush(f"❌ [Auth] Error en cuenta {account['id']}: {e}")
         return None
 
-def get_audio_duration(file_path):
-    """Obtiene la duración del audio usando ffprobe."""
-    try:
-        command = [
-            "ffprobe", "-v", "error", "-show_entries", "format=duration", 
-            "-of", "default=noprint_wrappers=1:nokey=1", file_path
-        ]
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        return float(result.stdout.strip())
-    except Exception as e:
-        _print_flush(f"⚠️ Error duración audio: {e}. Default 0.")
-        return 0
-
-# --- Función CRÍTICA de Optimización de RAM (sin cambios) ---
+# --- Optimización de RAM para Imagen ---
 def resize_input_image(input_path, max_dim=1280):
     """
-    PRE-ESCALADO CRÍTICO: Reescala la imagen de fondo ANTES de que FFmpeg inicie
-    el pipeline principal, previniendo el error "Ran out of memory" por imágenes 4K.
+    Reescala solo si es estrictamente necesario para evitar OOM.
     """
     name, ext = os.path.splitext(input_path)
     resized_path = f"{name}_resized{ext}"
     
     if os.path.exists(resized_path): return resized_path
 
-    _print_flush("🖼️ Revisando tamaño de imagen de fondo (RAM Fix)...")
-
     try:
-        # 1. Usar ffprobe para obtener la resolución
         probe_command = [
             "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", 
             "stream=width,height", "-of", "csv=p=0:s=x", input_path
@@ -143,14 +126,11 @@ def resize_input_image(input_path, max_dim=1280):
         result = subprocess.run(probe_command, capture_output=True, text=True, check=True)
         width, height = map(int, result.stdout.strip().split('x'))
         
-        # Mantener el límite de 1280px para prevenir OOM Kill al cargar la imagen
         if width <= max_dim and height <= max_dim:
-            _print_flush("✅ Imagen ya optimizada (o pequeña).")
             return input_path
         
-        _print_flush(f"⚠️ Imagen muy grande ({width}x{height}). Reescalando a max {max_dim}px...")
+        _print_flush(f"⚠️ Reescalando imagen grande ({width}x{height}) para proteger RAM...")
         
-        # 2. Reescalar la imagen con FFmpeg (comando ligero)
         scale_command = [
             "ffmpeg", "-y", "-i", input_path, 
             "-vf", f"scale='min({max_dim},iw)':'min({max_dim},ih)'", 
@@ -158,17 +138,14 @@ def resize_input_image(input_path, max_dim=1280):
         ]
         subprocess.run(scale_command, check=True, stderr=subprocess.DEVNULL)
         
-        if os.path.exists(resized_path):
-            return resized_path
-        else:
-            raise Exception("No se pudo reescalar la imagen.")
+        return resized_path if os.path.exists(resized_path) else input_path
 
     except Exception as e:
-        _print_flush(f"❌ Error al pre-escalar imagen: {e}. Usando original (¡RIESGO DE RAM!).")
+        _print_flush(f"Aviso imagen: {e}. Usando original.")
         return input_path 
 
 
-# --- PASO 1: Generar Audio (PIPER) (sin cambios) ---
+# --- PASO 1: Generar Audio (PIPER) ---
 def generar_audio(text):
     _print_flush("🎙️ Generando audio (Piper)...")
     if os.path.exists(AUDIO_PATH): os.remove(AUDIO_PATH)
@@ -180,22 +157,20 @@ def generar_audio(text):
         "--output_file", AUDIO_PATH
     ]
     try:
+        # Piper es muy rápido, no requiere optimización extra
         subprocess.run(command, input=text.encode('utf-8'), check=True, stderr=subprocess.DEVNULL)
         if not os.path.exists(AUDIO_PATH): raise Exception("No se generó audio")
     except Exception as e:
         raise Exception(f"Piper Error: {e}")
     
-    _print_flush("✅ Audio guardado.")
     return AUDIO_PATH
 
 
-# --- PASO 2: Generar Video (FFMPEG MÁXIMA OPTIMIZACIÓN - OUTRO ELIMINADO) ---
+# --- PASO 2: Generar Video (FFMPEG TURBO) ---
 def generar_video_ia(audio_path, imagen_path):
-    _print_flush("🎬 Generando video (FFmpeg, MÁXIMA OPTIMIZACIÓN: Estático, Overlays Secuenciales)...")
+    _print_flush("🎬 Generando video (FFmpeg MULTI-CORE)...")
     
-    gc.collect() 
-
-    # 4 Overlays estáticos de 3 segundos cada uno. INICIO en segundo 1.
+    # Overlays estáticos
     ASSETS_TIMING = [
         {'path': os.path.join(ASSETS_DIR, "overlay_subscribe_like.png"), 'start': 1, 'end': 4}, 
         {'path': os.path.join(ASSETS_DIR, "overlay_like.png"), 'start': 4, 'end': 7},      
@@ -203,32 +178,21 @@ def generar_video_ia(audio_path, imagen_path):
         {'path': os.path.join(ASSETS_DIR, "overlay_comment.png"), 'start': 10, 'end': 13},   
     ]
 
-    # --- CONSTRUCCIÓN DINÁMICA DE INPUTS ---
     inputs = []
-    # Input 0: Fondo de Noticia (Imagen pre-escalada)
     inputs.append(f"-loop 1 -i \"{imagen_path}\"")       
-    # Input 1: Audio
     inputs.append(f"-i \"{audio_path}\"")                
     
     overlay_assets = []
     next_idx = 2
     
-    # 2. Agregar Overlays Temporales
     for asset in ASSETS_TIMING:
         if os.path.exists(asset['path']):
             inputs.append(f"-loop 1 -i \"{asset['path']}\"")
             overlay_assets.append({'idx': next_idx, 'start': asset['start'], 'end': asset['end']})
             next_idx += 1
             
-    # El Outro Final se ELIMINA para máxima estabilidad
-    has_outro = False # Forzado a False
-
-    # --- CADENA DE FILTROS (La más simple posible con overlays) ---
-    
-    # 1. Filtro Audio: Ralentizar 10%
+    # Filtro de audio y video
     filter_chain = "[1:a]atempo=0.95[audio_out];"
-    
-    # 2. Filtro Video Base: Escalar y PAD para NO CROP 
     filter_chain += (
         "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,setsar=1,"
         "pad=1280:720:(ow-iw)/2:(oh-ih)/2[bg];"
@@ -236,49 +200,40 @@ def generar_video_ia(audio_path, imagen_path):
     last_stream = "[bg]"
     stream_counter = 1
 
-    # 3. Aplicar los Overlays Secuenciales
     for asset in overlay_assets:
         next_stream_name = f"[v{stream_counter}]"
-        
-        # Posición: (W-w)/2:3 (centrado horizontal, a 3px del borde superior - casi tocando el techo)
         filter_chain += (
             f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:3:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
         )
         last_stream = next_stream_name
         stream_counter += 1
 
-    # El stream final es el último que se procesó
-    filter_chain = filter_chain.rstrip(';') # Eliminar el último ';'
+    filter_chain = filter_chain.rstrip(';')
     final_map_stream = last_stream
 
-
-    # COMANDO FINAL (Máxima Optimización con CRF 42 y Audio 24k)
+    # --- COMANDO OPTIMIZADO: SIN LÍMITE DE HILOS (-threads eliminado) ---
     cmd = (
         f"ffmpeg -y -hide_banner -loglevel error "
         f"{' '.join(inputs)} "
         f"-filter_complex \"{filter_chain}\" "
-        f"-map \"{final_map_stream}\" -map [audio_out] " # <--- Mapeo al nuevo stream de audio
-        # Optimizaciones x264: tune stillimage, crf 42 (compresión extrema)
-        f"-c:v libx264 -preset ultrafast -tune stillimage -crf 42 -r 1 -threads 1 " 
-        f"-c:a aac -b:a 24k -ac 1 " # <--- Audio más ligero (24k)
+        f"-map \"{final_map_stream}\" -map [audio_out] "
+        # preset ultrafast + tune stillimage es la combinación más rápida
+        # Eliminado -threads 1 para permitir paralelismo
+        f"-c:v libx264 -preset ultrafast -tune stillimage -crf 38 " 
+        f"-c:a aac -b:a 64k -ac 1 " 
         f"-pix_fmt yuv420p -shortest "
         f"-max_muxing_queue_size 1024 " 
         f"\"{FINAL_VIDEO_PATH}\""
     )
     
     subprocess.run(cmd, shell=True, check=True)
-    _print_flush("✅ Video guardado.")
     return FINAL_VIDEO_PATH
 
-# --- PASO 3: Subir a YouTube (sin cambios) ---
+# --- PASO 3: Subir a YouTube (Optimizado) ---
 def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
-    _print_flush("Iniciando Paso 3: Subiendo a YouTube con Rotación de Cuentas...")
+    _print_flush("🚀 Subiendo a YouTube (Chunk 8MB)...")
     
-    gc.collect()
-
     start_index = load_last_account()
-    _print_flush(f"🚀 Cuenta inicial sugerida: {start_index}")
-    
     attempts = 0
     max_attempts = len(ACCOUNTS)
     current_idx = start_index
@@ -288,12 +243,9 @@ def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
         
         if youtube:
             try:
-                # --- LÓGICA DE TÍTULO Y DESCRIPCIÓN ---
                 suffix = " // Noticias.lat"
                 max_title_length = 98 - len(suffix) 
-                clean_title = title.strip()
-                if len(clean_title) > max_title_length:
-                    clean_title = clean_title[:max_title_length - 3].strip() + "..."
+                clean_title = title.strip()[:max_title_length].strip()
                 final_title = f"{clean_title}{suffix}"
                 
                 article_link = f"{FRONTEND_BASE_URL}/articulo/{article_id}"
@@ -302,20 +254,11 @@ def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
                 intro_line = f"Lee la noticia completa aquí: {article_link}"
                 outro_line = f"Visita nuestra web: {home_link}"
                 
-                reserved_chars = len(intro_line) + len(outro_line) + 100 
-                max_text_chars = 5000 - reserved_chars
-                
-                safe_text = full_text.strip()
-                if len(safe_text) > max_text_chars:
-                    safe_text = safe_text[:max_text_chars].strip() + "..."
-
                 final_description = (
                     f"{intro_line}\n\n"
-                    f"{safe_text}\n\n"
+                    f"{full_text.strip()[:4000]}...\n\n"
                     f"{outro_line}"
                 )
-                
-                _print_flush(f"Longitud Descripción: {len(final_description)} caracteres.")
                 
                 request_body = {
                     'snippet': {
@@ -330,10 +273,10 @@ def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
                     }
                 }
 
-                # Usamos chunksize=1MB para uploads más estables
-                media_file = MediaFileUpload(video_path, chunksize=1024*1024, resumable=True)
+                # OPTIMIZACIÓN CRÍTICA: Chunk de 8MB en lugar de 1MB
+                # Esto reduce masivamente el tiempo de handshake HTTP
+                media_file = MediaFileUpload(video_path, chunksize=8*1024*1024, resumable=True)
 
-                _print_flush(f"📤 Intentando subir a Cuenta {current_idx}...")
                 response_upload = youtube.videos().insert(
                     part='snippet,status',
                     body=request_body,
@@ -349,21 +292,19 @@ def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
             except HttpError as e:
                 error_content = e.content.decode('utf-8')
                 if e.resp.status in [403, 429] and ("quotaExceeded" in error_content or "daily limit" in error_content):
-                    _print_flush(f"⛔ CUOTA AGOTADA en Cuenta {current_idx}. Cambiando a la siguiente...")
+                    _print_flush(f"⛔ CUOTA AGOTADA en Cuenta {current_idx}. Rotando...")
                 else:
-                    _print_flush(f"❌ Error HTTP no relacionado con cuota: {e}")
+                    _print_flush(f"❌ Error HTTP: {e}")
             except Exception as e:
-                _print_flush(f"❌ Error desconocido al subir: {e}")
+                _print_flush(f"❌ Error subida: {e}")
                 
-        
         current_idx = get_next_account_index(current_idx)
         attempts += 1
-        _print_flush(f"🔄 Rotando a Cuenta {current_idx}...")
-        time.sleep(2) 
+        time.sleep(1) 
 
-    raise Exception("❌ TODAS las cuentas han fallado o están sin cuota.")
+    raise Exception("❌ TODAS las cuentas fallaron.")
 
-# --- PROCESO PRINCIPAL (sin cambios) ---
+# --- PROCESO PRINCIPAL ---
 def process_video_task(text_content, title, anchor_image_path, article_id):
     youtube_id = None
     audio_file = None
@@ -371,55 +312,40 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
     optimized_img_path = anchor_image_path 
 
     try:
-        _print_flush("--------------------------------------------------")
-        _print_flush("INICIO DE TRABAJO. Forzando limpieza inicial.")
-        gc.collect()
+        _print_flush(f"⚡ INICIO RÁPIDO: {article_id}")
+        
+        # Eliminados los gc.collect() intermedios para ganar velocidad
 
         # 1. Audio
         audio_file = generar_audio(text_content)
-        if not audio_file: raise Exception("Falló audio")
         
-        _print_flush("1/3 Completado. Forzando limpieza de Piper.")
-        gc.collect()
-
-        # 1.5. OPTIMIZACIÓN DE IMAGEN
+        # 1.5. Imagen (solo si es gigante)
         optimized_img_path = resize_input_image(anchor_image_path)
         
         # 2. Video
         video_file = generar_video_ia(audio_file, optimized_img_path) 
-        if not video_file: raise Exception("Falló video")
         
-        _print_flush("2/3 Completado. Forzando limpieza de FFmpeg.")
-        gc.collect()
-
         # 3. Subida
         youtube_id = subir_a_youtube_rotativo(video_file, title, text_content, article_id)
         if not youtube_id: raise Exception("Falló subida")
 
-        _print_flush(f"✅ FINALIZADO CON ÉXITO: {article_id}")
         _report_status_to_api("video_complete", article_id, {"youtubeId": youtube_id})
 
     except Exception as e:
-        _print_flush(f"❌ FALLO: {e}")
+        _print_flush(f"❌ FALLO GRAVE: {e}")
         _report_status_to_api("video_failed", article_id, {"error": str(e)})
     
     finally:
-        _print_flush("🧹 LIMPIEZA FINAL DE ARCHIVOS Y RAM...")
+        # Limpieza de archivos
+        for f in [audio_file, video_file]:
+            if f and os.path.exists(f): 
+                try: os.remove(f)
+                except: pass
         
-        # Eliminar audio
-        if audio_file and os.path.exists(audio_file): 
-            try: os.remove(audio_file)
-            except: pass
-            
-        # Eliminar video
-        if video_file and os.path.exists(video_file): 
-            try: os.remove(video_file)
-            except: pass
-            
-        # Eliminar imagen reescalada (si se creó y es diferente a la original)
         if optimized_img_path != anchor_image_path and os.path.exists(optimized_img_path):
             try: os.remove(optimized_img_path)
             except: pass
             
-        _print_flush("✨ Limpieza de RAM completa. Sistema listo.")
+        # Única limpieza de memoria al final
         gc.collect()
+        _print_flush("✨ Ciclo terminado. Listo para el siguiente.")
