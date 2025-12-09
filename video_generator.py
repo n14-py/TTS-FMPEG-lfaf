@@ -16,6 +16,8 @@ from googleapiclient.errors import HttpError
 load_dotenv()
 MAIN_API_URL = os.getenv("MAIN_API_URL")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+
+# Cambia esto si tu frontend tiene otra URL
 FRONTEND_BASE_URL = "https://noticias.lat" 
 
 AUDIO_PATH = "temp_audio/news_audio.mp3"
@@ -42,7 +44,7 @@ ACCOUNTS = [
 
 LAST_ACCOUNT_FILE = "last_account_used.txt"
 
-print("Cargando motor TTS: Piper (Ultraligero) y Sistema Multi-Cuenta Optimizado (Modo 480p/10fps)")
+print("Cargando motor TTS: Piper (Ultraligero) y Sistema Multi-Cuenta Optimizado (Modo 1 FPS)")
 
 # --- Funciones Auxiliares ---
 
@@ -108,9 +110,10 @@ def get_authenticated_service(account_idx):
         return None
 
 # --- Optimización de RAM para Imagen ---
-def resize_input_image(input_path, max_dim=854): # Bajamos a 854px (480p ancho)
+def resize_input_image(input_path, max_dim=1280): 
     """
-    Reescala agresivamente para evitar OOM en plan Free.
+    Reescala la imagen manteniendo el aspect ratio si supera el tamaño máximo.
+    Hemos subido el max_dim a 1280 para calidad HD, ya que a 1 FPS el consumo es bajo.
     """
     name, ext = os.path.splitext(input_path)
     resized_path = f"{name}_resized{ext}"
@@ -130,13 +133,13 @@ def resize_input_image(input_path, max_dim=854): # Bajamos a 854px (480p ancho)
         if width <= max_dim and height <= max_dim:
             return input_path
         
-        _print_flush(f"⚠️ Reescalando imagen grande ({width}x{height}) a 480p para proteger RAM...")
+        _print_flush(f"⚠️ Reescalando imagen grande ({width}x{height}) para proteger RAM...")
         
-        # Escalado rápido
+        # Escalado manteniendo ratio (sin deformar)
         scale_command = [
             "ffmpeg", "-y", "-i", input_path, 
             "-vf", f"scale='min({max_dim},iw)':'min({max_dim},ih)'", 
-            "-q:v", "10", # Calidad media-baja para el temp, ahorra espacio
+            "-q:v", "5", 
             resized_path 
         ]
         subprocess.run(scale_command, check=True, stderr=subprocess.DEVNULL)
@@ -168,11 +171,11 @@ def generar_audio(text):
     return AUDIO_PATH
 
 
-# --- PASO 2: Generar Video (FFMPEG TURBO - MODO FREE TIER) ---
+# --- PASO 2: Generar Video (FFMPEG TURBO - MODO 1 FPS & SIN BORDES) ---
 def generar_video_ia(audio_path, imagen_path):
-    _print_flush("🎬 Generando video 480p @ 10fps (Modo Ahorro)...")
+    _print_flush("🎬 Generando video @ 1fps (Sin cortes, sin bordes negros)...")
     
-    # Overlays estáticos
+    # Overlays estáticos (Aparecen 3 segundos cada uno = 3 frames a 1 fps)
     ASSETS_TIMING = [
         {'path': os.path.join(ASSETS_DIR, "overlay_subscribe_like.png"), 'start': 1, 'end': 4}, 
         {'path': os.path.join(ASSETS_DIR, "overlay_like.png"), 'start': 4, 'end': 7},      
@@ -193,20 +196,20 @@ def generar_video_ia(audio_path, imagen_path):
             overlay_assets.append({'idx': next_idx, 'start': asset['start'], 'end': asset['end']})
             next_idx += 1
             
-    # --- FILTRO OPTIMIZADO PARA 480p ---
-    # 1. Bajamos la resolución base a 854x480 (480p)
+    # --- FILTRO MODIFICADO: USA TAMAÑO ORIGINAL ---
+    # Eliminamos el 'pad' (borde negro) y el 'force_original_aspect_ratio'.
+    # Usamos scale para asegurar que las dimensiones sean pares (requerido por codecs).
     filter_chain = "[1:a]atempo=0.95[audio_out];"
     filter_chain += (
-        "[0:v]scale=854:480:force_original_aspect_ratio=decrease,setsar=1,"
-        "pad=854:480:(ow-iw)/2:(oh-ih)/2[bg];"
+        "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+        "setsar=1[bg];"
     )
     last_stream = "[bg]"
     stream_counter = 1
 
     for asset in overlay_assets:
         next_stream_name = f"[v{stream_counter}]"
-        # Escalamos los overlays si son muy grandes, o los ponemos directos
-        # (Para ahorrar CPU asumimos que encajan, si no, se verán grandes pero funcionará)
+        # Overlays centrados horizontalmente
         filter_chain += (
             f"{last_stream}[{asset['idx']}:v]overlay=(W-w)/2:10:enable='between(t,{asset['start']},{asset['end']})'{next_stream_name};"
         )
@@ -216,21 +219,21 @@ def generar_video_ia(audio_path, imagen_path):
     filter_chain = filter_chain.rstrip(';')
     final_map_stream = last_stream
 
-    # --- COMANDO EXTREMO PARA PLAN FREE ---
+    # --- COMANDO EXTREMO PARA PLAN FREE @ 1 FPS ---
     cmd = (
         f"ffmpeg -y -hide_banner -loglevel error "
         f"{' '.join(inputs)} "
         f"-filter_complex \"{filter_chain}\" "
         f"-map \"{final_map_stream}\" -map [audio_out] "
         
-        # OPCIONES DE CALIDAD / VELOCIDAD
-        f"-r 10 "                    # FPS: Bajamos a 10 FPS (Mucho menos CPU)
-        f"-ar 24000 "                # Audio: 24kHz (Suficiente para voz)
+        # OPCIONES 1 FPS
+        f"-r 1 "                     # FPS: 1 cuadro por segundo (Extremadamente ligero)
+        f"-ar 24000 "                # Audio: 24kHz
         f"-c:v libx264 "             # Codec Video
-        f"-preset ultrafast "        # Velocidad máxima de encoding
-        f"-tune stillimage "         # Optimización para imágenes estáticas
-        f"-crf 35 "                  # Compresión alta (Archivos livianos, subida rápida)
-        f"-c:a aac -b:a 48k -ac 1 "  # Audio mono bajo bitrate
+        f"-preset ultrafast "        # Velocidad máxima
+        f"-tune stillimage "         # Optimización imágenes
+        f"-crf 35 "                  # Compresión
+        f"-c:a aac -b:a 48k -ac 1 "  # Audio
         f"-pix_fmt yuv420p -shortest "
         f"\"{FINAL_VIDEO_PATH}\""
     )
@@ -282,7 +285,7 @@ def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
                     }
                 }
 
-                # Chunk pequeño para conexiones inestables o servidores lentos
+                # Chunk pequeño para conexiones inestables
                 media_file = MediaFileUpload(video_path, chunksize=4*1024*1024, resumable=True)
 
                 response_upload = youtube.videos().insert(
@@ -320,14 +323,14 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
     optimized_img_path = anchor_image_path 
 
     try:
-        _print_flush(f"⚡ INICIO TAREA (Modo Free): {article_id}")
+        _print_flush(f"⚡ INICIO TAREA (Modo 1 FPS): {article_id}")
         gc.collect() # Limpieza inicial
 
         # 1. Audio
         audio_file = generar_audio(text_content)
         
-        # 2. Reescalado de Imagen (Vital para RAM de 512MB)
-        optimized_img_path = resize_input_image(anchor_image_path, max_dim=854)
+        # 2. Reescalado de Imagen (Solo si es muy grande, ahora a 1280)
+        optimized_img_path = resize_input_image(anchor_image_path, max_dim=1280)
         
         # 3. Video
         video_file = generar_video_ia(audio_file, optimized_img_path) 
