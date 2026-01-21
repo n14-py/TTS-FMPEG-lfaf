@@ -224,7 +224,7 @@ def generar_video_ia(audio_path, imagen_path):
         f"-map \"{final_map_stream}\" -map [audio_out] "
         
         # OPCIONES DE CALIDAD / VELOCIDAD
-        f"-r 10 "                    # FPS: Bajamos a 10 FPS (Mucho menos CPU)
+        f"-r 1 "                    # FPS: Bajamos a 10 FPS (Mucho menos CPU)
         f"-ar 24000 "                # Audio: 24kHz (Suficiente para voz)
         f"-c:v libx264 "             # Codec Video
         f"-preset ultrafast "        # Velocidad máxima de encoding
@@ -283,8 +283,7 @@ def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
                 }
 
                 # Chunk pequeño para conexiones inestables o servidores lentos
-                media_file = MediaFileUpload(video_path, chunksize=4*1024*1024, resumable=True)
-
+                media_file = MediaFileUpload(video_path, chunksize=512*1024, resumable=True)
                 response_upload = youtube.videos().insert(
                     part='snippet,status',
                     body=request_body,
@@ -321,16 +320,24 @@ def process_video_task(text_content, title, anchor_image_path, article_id):
 
     try:
         _print_flush(f"⚡ INICIO TAREA (Modo Free): {article_id}")
-        gc.collect() # Limpieza inicial
+        gc.collect() 
 
         # 1. Audio
         audio_file = generar_audio(text_content)
+        gc.collect() # <--- LIMPIEZA
         
-        # 2. Reescalado de Imagen (Vital para RAM de 512MB)
+        # 2. Reescalado
         optimized_img_path = resize_input_image(anchor_image_path, max_dim=854)
+        gc.collect() # <--- LIMPIEZA
         
         # 3. Video
+        # Antes de renderizar, aseguramos que no haya nada en memoria
         video_file = generar_video_ia(audio_file, optimized_img_path) 
+        
+        # BORRAR INSUMOS INMEDIATAMENTE para liberar espacio para la subida
+        if os.path.exists(audio_file): os.remove(audio_file)
+        # No borramos la imagen optimizada aún por si acaso, pero el audio ya no sirve
+        gc.collect() # <--- LIMPIEZA CRÍTICA ANTES DE SUBIR
         
         # 4. Subida
         youtube_id = subir_a_youtube_rotativo(video_file, title, text_content, article_id)
