@@ -1,7 +1,7 @@
 Flask
-piper-tts
+gunicorn
+edge-tts
 requests
 python-dotenv
 google-api-python-client
 google-auth-oauthlib
-gunicorn

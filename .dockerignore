@@ -1,0 +1,32 @@
+# --- Directorios de Git y Configuración ---
+.git
+.gitignore
+.dockerignore
+
+# --- Entornos Virtuales y Cache de Python (BASURA) ---
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+
+# --- Carpetas Temporales de tu App (¡NO SUBIR NUNCA!) ---
+# Si subes esto, podrías llenar el disco de AWS con basura vieja
+temp_processing/
+temp_audio/
+temp_video/
+temp_images/
+output/
+assets_video/.DS_Store
+
+# --- Logs y Errores ---
+*.log
+.errors
+
+# --- Archivos de Sistema ---
+.DS_Store
+Thumbs.db
