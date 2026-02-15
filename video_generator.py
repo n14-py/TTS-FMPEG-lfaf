@@ -257,13 +257,12 @@ def render_video_ffmpeg(image_path, audio_path, text_title, output_path):
             # 4. COMPOSICIÓN (Presentador Centrado sobre fondo)
             f"[bg][presenter_loop]overlay=(W-w)/2:(H-h)/2:shortest=1[comp];"
             
-            # 5. TEXTO A LA IZQUIERDA (Lower Third style)
-            # x=50 (Pegado izquierda), y=h-160 (Abajo)
+# 5. TEXTO A LA IZQUIERDA (SIN FONDO, MÁS ABAJO)
+            # x=30 (Pegado izquierda), y=h-100 (Bien abajo)
             f"[comp]drawtext=fontfile='{font_path}':text='{clean_title}':"
             f"fontcolor=white:fontsize=40:line_spacing=12:"
-            f"shadowcolor=black@0.9:shadowx=3:shadowy=3:"
-            f"box=1:boxcolor=black@0.5:boxborderw=10:" # Caja semitransparente para leer mejor
-            f"x=50:y=h-180[outv]" 
+            f"shadowcolor=black@1.0:shadowx=4:shadowy=4:" # Sombra fuerte para que se lea sin el fondo
+            f"x=30:y=h-100[outv]"
         ),
         "-map", "[outv]",
         "-map", "2:a",
@@ -431,11 +430,12 @@ def process_video_task(text_content, title, image_url, article_id, article_url="
         description_final += f"{full_text_truncated}\n\n"
         
         # Añadir URL si existe
-        if article_url:
-            description_final += f"📰 Leer nota completa aquí: {article_url}\n\n"
+        if article_url and str(article_url).strip() != "":
+            description_final += f"🔗 LEER NOTA COMPLETA AQUÍ:\n{article_url}\n\n"
+        else:
+            description_final += "🔗 Visita nuestro sitio web para más detalles.\n\n"
             
-        description_final += "------------------------------------------------\n"
-        description_final += "#noticias #actualidad #internacional #ia"
+        description_final += "#noticias #actualidad #internacional"
 
         # PASO 5: Subir a YouTube
         tags = ["noticias", "actualidad", "ultimahora"]
