@@ -262,7 +262,7 @@ def render_video_ffmpeg(image_path, audio_path, text_title, output_path):
             f"[comp]drawtext=fontfile='{font_path}':text='{clean_title}':"
             f"fontcolor=white:fontsize=40:line_spacing=12:"
             f"shadowcolor=black@1.0:shadowx=4:shadowy=4:" # Sombra fuerte para que se lea sin el fondo
-            f"x=30:y=h-100[outv]"
+            f"x=30:y=h-145[outv]"
         ),
         "-map", "[outv]",
         "-map", "2:a",
