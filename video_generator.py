@@ -1,384 +1,338 @@
 import os
 import time
-import requests 
-import subprocess 
-import gc 
-import sys
-import asyncio 
 import random
-import edge_tts 
-from dotenv import load_dotenv
+import logging
+import json
+import asyncio
+import re
+import subprocess
+import uuid
+from datetime import datetime
+import requests
 
+# --- LIBRERÍAS DE YOUTUBE ---
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from google.oauth2.credentials import Credentials
 from googleapiclient.errors import HttpError
 
-# --- CARGAR VARIABLES ---
-load_dotenv()
-MAIN_API_URL = os.getenv("MAIN_API_URL")
-ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
-FRONTEND_BASE_URL = "https://noticias.lat" 
+# --- LIBRERÍA DE VOZ ---
+import edge_tts
 
-# --- RUTAS DE ARCHIVOS (USAMOS /tmp PARA AWS/LINUX) ---
-# Usamos carpetas temporales relativas para evitar permisos
-TEMP_DIR = "temp_processing"
-os.makedirs(TEMP_DIR, exist_ok=True)
+# ==========================================
+# CONFIGURACIÓN GENERAL
+# ==========================================
 
-AUDIO_PATH = os.path.join(TEMP_DIR, "news_audio.mp3")
-FINAL_VIDEO_PATH = os.path.join(TEMP_DIR, "final_news_video.mp4")
-ASSETS_DIR = "assets_video" 
+# Configuración de Logs
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# --- CONFIGURACIÓN DE VOZ (PLAN A y PLAN B) ---
-VOICE_PLAN_A = "es-MX-JorgeNeural"  # Principal (Hombre)
-VOICE_PLAN_B = "es-MX-DaliaNeural"  # Respaldo (Mujer)
+# Directorios
+TEMP_AUDIO = "temp_audio"
+TEMP_VIDEO = "temp_video"
+TEMP_IMG = "temp_processing"
+OUTPUT_DIR = "output"
+ASSETS_DIR = "assets_video"
 
+# Archivo del Presentador (DEBE ESTAR EN assets_video/)
+PRESENTER_FILENAME = "presenter.mp4"
+
+# Color de la pantalla verde (Tu color exacto)
+CHROMA_COLOR = "0x00bf63"
+
+# Scopes de YouTube
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
-API_SERVICE_NAME = 'youtube'
-API_VERSION = 'v3'
 
-# --- CUENTAS DE YOUTUBE ---
-ACCOUNTS = [
-    {"id": 0, "name": "Principal",    "secret": "client_secret_0.json", "token": "token_0.json"},
-    {"id": 1, "name": "NoticiasLat1", "secret": "client_secret_1.json", "token": "token_1.json"},
-    {"id": 2, "name": "NoticiasLat2", "secret": "client_secret_2.json", "token": "token_2.json"},
-    {"id": 3, "name": "NoticiasLat3", "secret": "client_secret_3.json", "token": "token_3.json"},
-    {"id": 4, "name": "NoticiasLat4", "secret": "client_secret_4.json", "token": "token_4.json"},
-    {"id": 5, "name": "NoticiasLat5", "secret": "client_secret_5.json", "token": "token_5.json"}
-]
+# Asegurar directorios
+for d in [TEMP_AUDIO, TEMP_VIDEO, TEMP_IMG, OUTPUT_DIR, ASSETS_DIR]:
+    os.makedirs(d, exist_ok=True)
 
-LAST_ACCOUNT_FILE = "last_account_used.txt"
+# ==========================================
+# 1. UTILIDADES Y DESCARGAS
+# ==========================================
 
-print(f"✅ CARGADO: Sistema ULTRA ROBUSTO (Edge-TTS + Curl Download + FFmpeg)")
+def sanitize_filename(filename):
+    return re.sub(r'[\\/*?:"<>|]', "", filename)
 
-# --- UTILIDADES DE LOG Y API ---
+def sanitize_text_for_ffmpeg(text):
+    """Limpia texto para evitar errores en FFmpeg (comillas, emojis)."""
+    text = re.sub(r'[^\w\s\.\,\!\?\-]', '', text)
+    text = text.replace("'", "").replace('"', "").replace(":", "")
+    # Cortar si es muy largo para el título
+    if len(text) > 50:
+        text = text[:47] + "..."
+    return text
 
-def _print_flush(message):
-    print(message)
-    sys.stdout.flush()
-
-def _report_status_to_api(endpoint, article_id, data={}):
-    """Reporta éxito o fallo al backend principal."""
-    if not MAIN_API_URL or not ADMIN_API_KEY:
-        return
-    url = f"{MAIN_API_URL}/api/articles/{endpoint}"
-    headers = {"x-api-key": ADMIN_API_KEY}
-    payload = {"articleId": article_id, **data}
+def download_image_robust(url, save_path):
+    """Descarga 'Militar' usando Python y CURL como respaldo."""
+    # Intento 1: Python
     try:
-        requests.post(url, json=payload, headers=headers, timeout=10)
+        response = requests.get(url, timeout=15, verify=False)
+        if response.status_code == 200:
+            with open(save_path, 'wb') as f:
+                f.write(response.content)
+            return True
     except Exception as e:
-        _print_flush(f"⚠️ Alerta: No se pudo reportar a la API: {e}")
+        logger.warning(f"⚠️ Python falló descargando imagen: {e}")
 
-# --- GESTIÓN DE CUENTAS YOUTUBE ---
-
-def get_next_account_index(current_index):
-    return (current_index + 1) % len(ACCOUNTS)
-
-def save_last_account(index):
+    # Intento 2: CURL (Linux System)
     try:
-        with open(LAST_ACCOUNT_FILE, "w") as f: f.write(str(index))
-    except: pass
-
-def load_last_account():
-    try:
-        if os.path.exists(LAST_ACCOUNT_FILE):
-            with open(LAST_ACCOUNT_FILE, "r") as f: return int(f.read().strip())
-    except: pass
-    return 0
-
-def get_authenticated_service(account_idx):
-    account = ACCOUNTS[account_idx]
-    if not os.path.exists(account['token']): return None
-    try:
-        creds = Credentials.from_authorized_user_file(account['token'], SCOPES)
-        if not creds.valid:
-            if creds.expired and creds.refresh_token:
-                creds.refresh(requests.Request()) 
-                with open(account['token'], 'w') as token: token.write(creds.to_json())
-            else: return None
-        return build(API_SERVICE_NAME, API_VERSION, credentials=creds, cache_discovery=False)
-    except Exception: return None
-
-# --- MÓDULO 1: DESCARGA MILITAR DE IMÁGENES (SI O SI) ---
-
-def validar_archivo_imagen(ruta):
-    """Verifica si el archivo descargado es realmente una imagen válida."""
-    if not os.path.exists(ruta): return False
-    if os.path.getsize(ruta) < 500: return False # Muy pequeña = error
-    
-    # Leemos los primeros bytes para ver si es HTML (error común 403)
-    try:
-        with open(ruta, 'rb') as f:
-            header = f.read(20)
-            if b'<html' in header or b'<!DOCTYPE' in header or b'{' in header:
-                return False # Es un HTML o JSON de error
-    except:
-        return False
-    return True
-
-def descargar_imagen_agresiva(url_original, destino_local):
-    """
-    Intenta descargar la imagen usando 3 métodos de fuerza creciente.
-    """
-    _print_flush(f"⬇️ Iniciando protocolo de descarga para: {url_original}")
-    
-    # --- MÉTODO 1: Requests con Headers de Navegador (Estándar) ---
-    headers_normal = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
-    }
-    try:
-        resp = requests.get(url_original, headers=headers_normal, stream=True, timeout=10)
-        if resp.status_code == 200:
-            with open(destino_local, 'wb') as f:
-                for chunk in resp.iter_content(1024): f.write(chunk)
-            if validar_archivo_imagen(destino_local):
-                _print_flush("✅ Descarga exitosa (Método 1)")
-                return True
-    except Exception as e:
-        _print_flush(f"⚠️ Falló Método 1: {e}")
-
-    # --- MÉTODO 2: Requests simulando Google Referer (Anti-Hotlink) ---
-    _print_flush("🔄 Intentando Método 2 (Referer Spoofing)...")
-    headers_google = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15",
-        "Referer": "https://www.google.com/",
-        "Sec-Fetch-Dest": "image",
-        "Sec-Fetch-Mode": "no-cors"
-    }
-    try:
-        resp = requests.get(url_original, headers=headers_google, stream=True, timeout=10)
-        if resp.status_code == 200:
-            with open(destino_local, 'wb') as f:
-                for chunk in resp.iter_content(1024): f.write(chunk)
-            if validar_archivo_imagen(destino_local):
-                _print_flush("✅ Descarga exitosa (Método 2)")
-                return True
-    except: pass
-
-    # --- MÉTODO 3: CURL de Sistema (Fuerza Bruta) ---
-    # Esto salta bloqueos de librerías de Python. Es el "SI O SI".
-    _print_flush("🔥 Intentando Método 3 (CURL System)...")
-    try:
-        # -L sigue redirecciones, -A cambia user agent, --retry reintenta
         cmd = [
-            "curl", "-L", "-A", "Mozilla/5.0 (X11; Linux x86_64) Firefox/100.0",
-            "--retry", "2", "--connect-timeout", "10",
-            "-o", destino_local, url_original
+            "curl", "-L", "-k",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "-o", save_path, url
         ]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if validar_archivo_imagen(destino_local):
-             _print_flush("✅ Descarga exitosa (Método 3 - CURL)")
-             return True
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+            return True
     except Exception as e:
-        _print_flush(f"❌ Falló Método 3: {e}")
-
-    # Si llegamos aquí, la URL es imposible o está muerta.
-    # El "SI O SI" requiere que devolvamos False para que el sistema use una imagen generada localmente si es necesario
-    # (aunque aquí fallaremos la tarea si es vital, o usamos placeholder si así se desea en un futuro)
-    _print_flush("❌ FATAL: La imagen es inaccesible por métodos humanos o bots.")
+        logger.error(f"❌ CURL falló también: {e}")
+    
     return False
 
-def sanitizar_imagen(input_path):
-    """
-    Convierte CUALQUIER cosa que haya bajado (WebP, AVIF, JPG corrupto)
-    a un PNG limpio y escalado para HD.
-    """
-    _print_flush(f"🧼 Sanitizando y Normalizando imagen: {input_path}")
-    clean_path = os.path.join(TEMP_DIR, "clean_image.png")
-    
-    # Comando FFmpeg para forzar lectura y conversión a PNG RGBA
-    cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", input_path,
-        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2", # Escala inteligente y Relleno negro si es necesario
-        "-pix_fmt", "rgba", 
-        clean_path
-    ]
-    try:
-        subprocess.run(cmd, check=True)
-        return clean_path
-    except subprocess.CalledProcessError:
-        raise Exception("FFmpeg no pudo entender el archivo de imagen. Probablemente corrupto.")
+# ==========================================
+# 2. GENERACIÓN DE AUDIO (EDGE-TTS)
+# ==========================================
 
-# --- MÓDULO 2: AUDIO EDGE-TTS (CON RESPALDO AUTOMÁTICO) ---
-
-async def _edge_tts_generate(text, voice, output):
+async def generate_audio_edge(text, output_file):
+    """Genera audio realista con Edge-TTS."""
+    # Voces: 'es-MX-DaliaNeural', 'es-AR-TomasNeural', 'es-ES-AlvaroNeural'
+    voice = 'es-MX-DaliaNeural' 
     communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(output)
+    await communicate.save(output_file)
 
-def generar_audio(text):
-    _print_flush(f"🎙️ Generando audio...")
-    if os.path.exists(AUDIO_PATH): os.remove(AUDIO_PATH)
-    
-    # Pausa humana aleatoria (Seguridad anti-bloqueo)
-    time.sleep(random.uniform(1.0, 2.5))
-    
-    # PLAN A: Voz Principal
-    try:
-        _print_flush(f"   👉 Intento Plan A: {VOICE_PLAN_A}")
-        asyncio.run(_edge_tts_generate(text, VOICE_PLAN_A, AUDIO_PATH))
-        if os.path.exists(AUDIO_PATH) and os.path.getsize(AUDIO_PATH) > 100:
-            return AUDIO_PATH
-    except Exception as e:
-        _print_flush(f"⚠️ Falló Plan A ({e}).")
+# ==========================================
+# 3. RENDERIZADO DE VIDEO (FFMPEG COMPLEJO)
+# ==========================================
 
-    # Si falla A, esperamos y probamos B
-    _print_flush("   ⏱️ Esperando 3s antes de Plan B...")
-    time.sleep(3)
+def render_video_ffmpeg(image_path, audio_path, text_title, output_path):
+    """
+    Crea el video final con:
+    - Fondo: Imagen de la noticia.
+    - Presentador: Video con Chroma Key (#00bf63) en bucle "Ping-Pong".
+    - Texto: Título superpuesto.
+    - Audio: Narración TTS.
+    """
+    presenter_path = os.path.join(ASSETS_DIR, PRESENTER_FILENAME)
     
-    # PLAN B: Voz Respaldo
-    try:
-        _print_flush(f"   👉 Intento Plan B: {VOICE_PLAN_B}")
-        asyncio.run(_edge_tts_generate(text, VOICE_PLAN_B, AUDIO_PATH))
-        if os.path.exists(AUDIO_PATH):
-            return AUDIO_PATH
-    except Exception as e2:
-         raise Exception(f"❌ FALLO TOTAL DE AUDIO (Ni A ni B funcionaron): {e2}")
+    # Verificación de archivos
+    if not os.path.exists(presenter_path):
+        logger.error(f"❌ FALTA EL VIDEO DEL PRESENTADOR: {presenter_path}")
+        return False
     
-    raise Exception("Audio generado pero archivo vacío.")
+    # Fuente para el texto (Linux path)
+    font_path = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+    if not os.path.exists(font_path):
+        font_path = "Arial" # Fallback para Windows/Mac local
 
-# --- MÓDULO 3: GENERACIÓN DE VIDEO IA (FFMPEG OPTIMIZADO) ---
+    clean_title = sanitize_text_for_ffmpeg(text_title)
 
-def generar_video_ia(audio_path, imagen_path):
-    _print_flush("🎬 Renderizando video final...")
+    # --- COMANDO FFMPEG BLINDADO ---
+    # Explicación rápida de filtros:
+    # [0:v] -> Imagen de fondo (escalada a 1080x1920)
+    # [1:v] -> Presentador (escalado + chroma key + split + reverse + concat + loop)
+    # overlay -> Pone al presentador encima del fondo
+    # drawtext -> Escribe el título
     
-    # Assets (Suscríbete, Like, etc.)
-    assets = [
-        {'path': os.path.join(ASSETS_DIR, "overlay_subscribe_like.png"), 'start': 2, 'end': 5}, 
-        {'path': os.path.join(ASSETS_DIR, "overlay_bell.png"), 'start': 8, 'end': 11},      
+    cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", image_path,       # Input 0: Imagen
+        "-i", presenter_path,                 # Input 1: Presentador
+        "-i", audio_path,                     # Input 2: Audio
+        "-filter_complex",
+        (
+            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg];"
+            f"[1:v]scale=1080:1920[v_scaled];"
+            f"[v_scaled]chromakey={CHROMA_COLOR}:0.1:0.2[v_keyed];"
+            f"[v_keyed]split[main][reverse_copy];"
+            f"[reverse_copy]reverse[v_reversed];"
+            f"[main][v_reversed]concat=n=2:v=1:a=0[boomerang];"
+            f"[boomerang]loop=-1:size=32767:start=0[presenter_loop];"
+            f"[bg][presenter_loop]overlay=0:0:shortest=1[comp];"
+            f"[comp]drawtext=fontfile='{font_path}':text='{clean_title}':"
+            f"fontcolor=white:fontsize=60:box=1:boxcolor=black@0.6:"
+            f"boxborderw=20:x=(w-text_w)/2:y=h-350[outv]"
+        ),
+        "-map", "[outv]",
+        "-map", "2:a",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",  # ¡VITAL PARA T3.MICRO!
+        "-r", "14",            # 14 FPS para ahorrar CPU
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-shortest",           # Cortar cuando acabe el audio
+        output_path
     ]
-    
-    # Construcción del comando FFmpeg
-    # Input 0: Imagen de fondo (Loop)
-    # Input 1: Audio
-    inputs = [f"-loop 1 -i \"{imagen_path}\"", f"-i \"{audio_path}\""]
-    
-    filter_complex = ""
-    # Escala base para la imagen de fondo (asegura 1280x720)
-    filter_complex += "[0:v]scale=1280:720,setsar=1[bg];"
-    last_layer = "[bg]"
-    
-    # Añadir Overlays si existen
-    stream_idx = 1
-    input_idx = 2 # 0 es imagen, 1 es audio
-    
-    for asset in assets:
-        if os.path.exists(asset['path']):
-            inputs.append(f"-loop 1 -i \"{asset['path']}\"")
-            filter_complex += f"{last_layer}[{input_idx}:v]overlay=(W-w)/2:H-h-50:enable='between(t,{asset['start']},{asset['end']})'[v{stream_idx}];"
-            last_layer = f"[v{stream_idx}]"
-            stream_idx += 1
-            input_idx += 1
-            
-    # Comando Final
-    cmd = (
-        f"ffmpeg -y -hide_banner -loglevel error "
-        f"{' '.join(inputs)} "
-        f"-filter_complex \"{filter_complex.rstrip(';')}\" "
-        f"-map \"{last_layer}\" -map 1:a " # Mapear ultimo video layer y audio (input 1)
-        f"-c:v libx264 -preset ultrafast -tune stillimage -crf 30 " # Video rápido
-        f"-c:a aac -b:a 128k -ac 2 " # Audio estéreo estándar
-        f"-pix_fmt yuv420p -shortest " # Cortar cuando acabe el audio
-        f"\"{FINAL_VIDEO_PATH}\""
-    )
-    
-    subprocess.run(cmd, shell=True, check=True)
-    return FINAL_VIDEO_PATH
 
-# --- MÓDULO 4: SUBIDA A YOUTUBE (ROTACIÓN INTELIGENTE) ---
+    try:
+        logger.info("🎬 Renderizando Video con Presentador Virtual...")
+        subprocess.run(cmd, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ Error en FFmpeg: {e}")
+        return False
 
-def subir_a_youtube_rotativo(video_path, title, full_text, article_id):
-    _print_flush("🚀 Subiendo a YouTube...")
-    current_idx = load_last_account()
-    attempts = 0
-    
-    while attempts < len(ACCOUNTS):
-        youtube = get_authenticated_service(current_idx)
-        if youtube:
+# ==========================================
+# 4. GESTIÓN DE YOUTUBE (ROTACIÓN DE CUENTAS)
+# ==========================================
+
+def get_authenticated_service(account_index):
+    """Autentica con la cuenta X (0-5)."""
+    creds = None
+    token_file = f'token_{account_index}.json'
+    client_secrets_file = f'client_secret_{account_index}.json'
+
+    # Verificar si existen los archivos
+    if not os.path.exists(client_secrets_file):
+        logger.error(f"❌ No existe {client_secrets_file}")
+        return None
+
+    # Cargar token si existe
+    if os.path.exists(token_file):
+        try:
+            creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+        except Exception:
+            logger.warning(f"⚠️ Token {account_index} corrupto.")
+
+    # Refrescar token si es necesario
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
             try:
-                # SEO y Título
-                final_title = f"{title.strip()[:95]} | Noticias"
-                desc = (
-                    f"📰 Noticia completa: {FRONTEND_BASE_URL}/articulo/{article_id}\n\n"
-                    f"{full_text[:3500]}...\n\n"
-                    f"⚠️ Este contenido es informativo."
-                )
-                
-                body = {
-                    'snippet': {
-                        'title': final_title, 
-                        'description': desc, 
-                        'tags': ['noticias', 'actualidad', 'latinoamerica'], 
-                        'categoryId': '25' # Noticias y Politica
-                    },
-                    'status': {'privacyStatus': 'public', 'selfDeclaredMadeForKids': False}
-                }
-                
-                media = MediaFileUpload(video_path, chunksize=1024*1024, resumable=True)
-                resp = youtube.videos().insert(part='snippet,status', body=body, media_body=media).execute()
-                
-                video_id = resp.get('id')
-                _print_flush(f"✅ SUBIDA EXITOSA: {video_id} (Cuenta {current_idx})")
-                
-                # Rotar cuenta para la próxima
-                save_last_account(get_next_account_index(current_idx))
-                return video_id
-
-            except HttpError as e:
-                # Manejo específico de Cuota Excedida (403/429)
-                if e.resp.status in [403, 429]:
-                    _print_flush(f"⛔ CUOTA LLENA Cuenta {current_idx}. Probando siguiente...")
-                else:
-                    _print_flush(f"❌ Error API YouTube: {e}")
+                creds.refresh(Request())
+                with open(token_file, 'w') as token:
+                    token.write(creds.to_json())
             except Exception as e:
-                _print_flush(f"❌ Error Genérico Subida: {e}")
-                
-        # Si falló, pasamos a la siguiente cuenta
-        current_idx = get_next_account_index(current_idx)
-        attempts += 1
-        time.sleep(2) # Pausa técnica
+                logger.error(f"❌ Error refrescando token {account_index}: {e}")
+                return None
+        else:
+            logger.error(f"❌ Token {account_index} inválido y sin refresh. Requiere re-autenticación manual.")
+            return None
 
-    raise Exception("❌ ERROR CRÍTICO: Todas las cuentas fallaron o están sin cuota.")
+    try:
+        return build('youtube', 'v3', credentials=creds)
+    except HttpError as e:
+        logger.error(f"❌ Error conectando con YouTube API {account_index}: {e}")
+        return None
 
-# --- PROCESO PRINCIPAL (ORQUESTADOR) ---
+def upload_video(file_path, title, description, tags, category_id="22"):
+    """
+    Intenta subir el video rotando cuentas (0 al 5).
+    Si una falla por cuota, pasa a la siguiente.
+    """
+    max_accounts = 6
+    
+    for account_index in range(max_accounts):
+        logger.info(f"🔄 Intentando subir con Cuenta {account_index}...")
+        
+        youtube = get_authenticated_service(account_index)
+        if not youtube:
+            continue
+
+        body = {
+            'snippet': {
+                'title': title[:99], # Máximo 100 chars
+                'description': description[:4900],
+                'tags': tags,
+                'categoryId': category_id
+            },
+            'status': {
+                'privacyStatus': 'public',
+                'selfDeclaredMadeForKids': False
+            }
+        }
+
+        try:
+            media = MediaFileUpload(file_path, chunksize=1024*1024, resumable=True)
+            request = youtube.videos().insert(part=','.join(body.keys()), body=body, media_body=media)
+            
+            response = None
+            while response is None:
+                status, response = request.next_chunk()
+                if status:
+                    logger.info(f"🚀 Subiendo... {int(status.progress() * 100)}%")
+
+            video_id = response.get('id')
+            logger.info(f"✅ SUBIDA EXITOSA: {video_id} (Cuenta {account_index})")
+            return video_id
+
+        except HttpError as e:
+            if e.resp.status in [403, 429]:
+                reason = e.content.decode('utf-8')
+                if "quotaExceeded" in reason:
+                    logger.warning(f"⚠️ CUOTA EXCEDIDA en Cuenta {account_index}. Cambiando a la siguiente...")
+                    continue # Pasa al siguiente loop (siguiente cuenta)
+                else:
+                    logger.error(f"❌ Error 403/429 no relacionado con cuota: {e}")
+            else:
+                logger.error(f"❌ Error HTTP desconocido en Cuenta {account_index}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error inesperado subiendo con Cuenta {account_index}: {e}")
+
+    logger.error("❌ ERROR CRÍTICO: Todas las cuentas fallaron o están sin cuota.")
+    return None
+
+# ==========================================
+# 5. ORQUESTADOR PRINCIPAL
+# ==========================================
 
 def process_video_task(text_content, title, image_url, article_id):
+    """
+    Función Maestra:
+    1. Descarga recursos.
+    2. Genera audio.
+    3. Renderiza video (Green Screen).
+    4. Sube a YouTube.
+    5. Limpia.
+    """
+    start_time = time.time()
+    unique_id = uuid.uuid4().hex[:8]
+    
+    # Rutas de archivos temporales
+    raw_img_path = os.path.join(TEMP_IMG, f"{unique_id}_raw.jpg")
+    audio_path = os.path.join(TEMP_AUDIO, f"{unique_id}.mp3")
+    final_video_path = os.path.join(OUTPUT_DIR, f"{article_id}.mp4")
+
+    logger.info(f"⚡ INICIO PROCESO ID: {article_id}")
+
     try:
-        _print_flush(f"⚡ INICIO PROCESO ID: {article_id}")
-        gc.collect()
-        
-        # 1. Descarga "SI O SI" de la imagen
-        local_img_raw = os.path.join(TEMP_DIR, "raw_image")
-        success = descargar_imagen_agresiva(image_url, local_img_raw)
-        
-        if not success:
-            raise Exception("No se pudo descargar la imagen ni con métodos agresivos.")
-            
-        # 2. Sanitización (Convertir a HD PNG)
-        clean_img = sanitizar_imagen(local_img_raw)
-        
-        # 3. Audio (Plan A o B)
-        audio_file = generar_audio(text_content)
-        
-        # 4. Video
-        video_file = generar_video_ia(audio_file, clean_img)
-        
-        # 5. Subida
-        yt_id = subir_a_youtube_rotativo(video_file, title, text_content, article_id)
-        
-        # Reportar Éxito
-        _report_status_to_api("video_complete", article_id, {"youtubeId": yt_id})
-        
-    except Exception as e:
-        _print_flush(f"❌ FALLO TAREA: {e}")
-        _report_status_to_api("video_failed", article_id, {"error": str(e)})
-        
-    finally:
-        # Limpieza obsesiva para servidores pequeños
-        _print_flush("🧹 Limpiando archivos temporales...")
+        # 1. Descargar Imagen
+        logger.info(f"⬇️ Iniciando descarga de imagen...")
+        if not download_image_robust(image_url, raw_img_path):
+            logger.error("❌ Abortando: No se pudo descargar imagen.")
+            return None
+
+        # 2. Generar Audio (Edge-TTS)
+        logger.info(f"🎙️ Generando audio (Edge-TTS)...")
         try:
-            shutil.rmtree(TEMP_DIR) # Borra todo el directorio temporal
-            os.makedirs(TEMP_DIR, exist_ok=True) # Lo recrea vacío
-        except: pass
-        gc.collect()
+            asyncio.run(generate_audio_edge(text_content, audio_path))
+        except Exception as e:
+            logger.error(f"❌ Error en TTS: {e}")
+            return None
+
+        # 3. Renderizar Video
+        success = render_video_ffmpeg(raw_img_path, audio_path, title, final_video_path)
+        if not success:
+            logger.error("❌ Abortando: Falló renderizado de video.")
+            return None
+
+        # 4. Subir a YouTube
+        logger.info("🚀 Iniciando protocolo de subida a YouTube...")
+        tags = ["noticias", "actualidad", "video"]
+        video_id = upload_video(final_video_path, title, text_content, tags)
+
+        # 5. Limpieza
+        logger.info("🧹 Limpiando archivos temporales...")
+        if os.path.exists(raw_img_path): os.remove(raw_img_path)
+        if os.path.exists(audio_path): os.remove(audio_path)
+        # Opcional: Borrar video final para ahorrar espacio
+        if os.path.exists(final_video_path): os.remove(final_video_path)
+
+        total_time = time.time() - start_time
+        logger.info(f"🏁 Tarea finalizada en {total_time:.2f} segundos.")
+        return video_id
+
+    except Exception as e:
+        logger.error(f"❌ Error fatal en process_video_task: {e}")
+        return None
