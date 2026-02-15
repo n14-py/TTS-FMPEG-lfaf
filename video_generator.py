@@ -319,3 +319,6 @@ def process_video_task(text_content, title, image_url, article_id):
     except Exception as e:
         logger.error(f"❌ Error fatal: {e}")
         return None
+    
+
+    
