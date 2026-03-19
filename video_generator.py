@@ -1,58 +1,46 @@
 # -*- coding: utf-8 -*-
 """
-=============================================================================
- SISTEMA DE GENERACIÓN DE VIDEO IA - LFAF TECH (VERSIÓN DEFINITIVA 5.5)
-=============================================================================
- Autor: LFAF Bot
- Descripción: 
-   Genera videos de noticias automatizados para YouTube:
-   - Formato 16:9 (1280x720) Horizontal.
-   - Texto alineado a la izquierda (Estilo TV Lower Third).
-   - Descripción con noticia completa + URL.
-   - Presentador Sólido (Chroma Key ajustado).
-   - Sistema de Bloqueo Anti-Duplicados y Reintentos.
-   - Rotación de Cuentas de YouTube (Anti-Límite).
-=============================================================================
+Generador de Video Automatizado para Noticias.lat
+-------------------------------------------------
+Este script se encarga de:
+1. Descargar la imagen de la noticia.
+2. Generar el audio usando Microsoft Edge TTS.
+3. Renderizar el video con FFmpeg (Chroma Key para el presentador).
+4. Subir el video a YouTube rotando entre 4 cuentas.
 """
 
 import os
 import time
-import random
 import logging
-import json
 import asyncio
 import re
 import subprocess
 import uuid
 import textwrap
 import shutil
+import glob
 from datetime import datetime
 import requests
 
-# --- LIBRERÍAS DE GOOGLE/YOUTUBE ---
+# --- LIBRERÍAS DE GOOGLE Y YOUTUBE ---
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
-# --- LIBRERÍA DE VOZ NEURAL ---
+# --- LIBRERÍA DE TTS ---
 import edge_tts
 
-# ==========================================
-# 1. CONFIGURACIÓN DEL SISTEMA
-# ==========================================
+# ==============================================================================
+# 1. CONFIGURACIÓN GENERAL DEL SISTEMA
+# ==============================================================================
 
-# Configuración de Logs (Detallada para depuración)
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - [%(levelname)s] - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+# Configuración de Logs para ver todo en la consola
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- RUTAS DE DIRECTORIOS ---
+# Directorios de trabajo
 BASE_DIR = os.getcwd()
 TEMP_AUDIO = os.path.join(BASE_DIR, "temp_audio")
 TEMP_VIDEO = os.path.join(BASE_DIR, "temp_video")
@@ -61,289 +49,301 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets_video")
 LOCKS_DIR = os.path.join(BASE_DIR, "locks_history") 
 
-# --- ARCHIVOS DE ACTIVOS ---
-# El video del presentador debe estar en assets_video/presenter.mp4
+# Nombre del archivo del presentador con pantalla verde
 PRESENTER_FILENAME = "presenter.mp4"
 
-# --- AJUSTES DE CHROMA KEY (SOLIDEZ) ---
+# Ajustes Avanzados para FFmpeg (Chroma Key / Pantalla Verde)
 CHROMA_COLOR = "0x00bf63" 
 CHROMA_SIMILARITY = "0.15" 
-CHROMA_BLEND = "0.05" # Bajo para evitar transparencia en la persona
+CHROMA_BLEND = "0.05"
 
-# --- AJUSTES DE YOUTUBE ---
+# Ajustes de YouTube
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
-MAX_ACCOUNTS = 6  # Del 0 al 5
 
-# Inicialización de directorios (Crea las carpetas si no existen)
-for d in [TEMP_AUDIO, TEMP_VIDEO, TEMP_IMG, OUTPUT_DIR, ASSETS_DIR, LOCKS_DIR]:
-    if not os.path.exists(d):
+# IMPORTANTE: Límite de cuentas para la rotación (0, 1, 2, 3)
+MAX_ACCOUNTS = 4 
+
+
+# ==============================================================================
+# 2. LIMPIEZA INICIAL DEL SERVIDOR
+# ==============================================================================
+
+def initial_cleanup():
+    """
+    Función que limpia basura vieja si el servidor se reinició por un error previo.
+    Evita que el disco duro se llene con el tiempo.
+    """
+    logger.info("🧹 Ejecutando limpieza inicial de directorios temporales...")
+    folders = [TEMP_AUDIO, TEMP_VIDEO, TEMP_IMG, OUTPUT_DIR]
+    
+    for folder in folders:
+        # Si la carpeta no existe, la creamos
+        if not os.path.exists(folder):
+            try:
+                os.makedirs(folder, exist_ok=True)
+                logger.info(f"📁 Carpeta creada: {folder}")
+            except Exception as e:
+                logger.error(f"❌ Error creando carpeta {folder}: {e}")
+        else:
+            # Si existe, borramos los archivos dentro de ella
+            for filename in os.listdir(folder):
+                file_path = os.path.join(folder, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo borrar {file_path}: {e}")
+
+# Ejecutamos la limpieza inmediatamente al arrancar el script
+initial_cleanup()
+
+
+# ==============================================================================
+# 3. FUNCIONES AUXILIARES Y DE CONTROL (ROTACIÓN Y BLOQUEOS)
+# ==============================================================================
+
+def get_next_account_index():
+    """
+    Calcula qué cuenta de YouTube toca usar hoy (0->1->2->3->0...)
+    Guarda el estado en un archivo de texto para no perder la cuenta si se reinicia.
+    """
+    rotator_file = os.path.join(LOCKS_DIR, "account_rotator.txt")
+    
+    # Asegurar que existe el directorio de bloqueos
+    if not os.path.exists(LOCKS_DIR):
+        os.makedirs(LOCKS_DIR, exist_ok=True)
+
+    current_index = 0
+    
+    # Leemos cuál fue el último canal que usamos
+    if os.path.exists(rotator_file):
         try:
-            os.makedirs(d, exist_ok=True)
-            logger.info(f"📁 Directorio verificado: {d}")
+            with open(rotator_file, 'r') as f:
+                current_index = int(f.read().strip())
         except Exception as e:
-            logger.error(f"❌ Error creando directorio {d}: {e}")
+            logger.warning(f"⚠️ Error leyendo archivo de rotación, asumiendo 0: {e}")
+            current_index = 0
+    
+    # Calculamos el siguiente canal a usar
+    next_index = (current_index + 1) % MAX_ACCOUNTS
+    
+    # Guardamos el nuevo canal para el futuro
+    try:
+        with open(rotator_file, 'w') as f:
+            f.write(str(next_index))
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo guardar el archivo de rotación: {e}")
 
-# ==========================================
-# 2. SISTEMA ANTI-DUPLICADOS
-# ==========================================
+    logger.info(f"🔄 ROTACIÓN DE CANALES: Toca usar Cuenta {next_index} (La anterior fue {current_index})")
+    return next_index
 
 def is_already_processed(article_id):
-    """
-    Verifica si este ID ya fue procesado exitosamente.
-    Evita que el bot suba el mismo video 2 veces si la API lo pide de nuevo.
-    """
-    if not article_id:
-        return False
-    lock_file = os.path.join(LOCKS_DIR, f"{article_id}.done")
-    return os.path.exists(lock_file)
+    """Verifica si la noticia ya se procesó anteriormente buscando su archivo .done"""
+    if not article_id: return False
+    return os.path.exists(os.path.join(LOCKS_DIR, f"{article_id}.done"))
 
 def mark_as_processed(article_id, video_id):
-    """
-    Crea una marca de seguridad indicando que este articulo ya es video.
-    """
-    if not article_id:
-        return
-    lock_file = os.path.join(LOCKS_DIR, f"{article_id}.done")
+    """Crea un archivo .done para que esta noticia no se vuelva a hacer en el futuro"""
+    if not article_id: return
     try:
-        with open(lock_file, 'w') as f:
+        if not os.path.exists(LOCKS_DIR):
+            os.makedirs(LOCKS_DIR, exist_ok=True)
+            
+        done_file = os.path.join(LOCKS_DIR, f"{article_id}.done")
+        with open(done_file, 'w') as f:
             f.write(f"Processed at {datetime.now()} - YouTube ID: {video_id}")
     except Exception as e:
-        logger.warning(f"⚠️ No se pudo guardar bloqueo para {article_id}: {e}")
-
-# ==========================================
-# 3. PROCESAMIENTO DE TEXTO (ALINEACIÓN IZQUIERDA)
-# ==========================================
-
-def sanitize_filename(filename):
-    """Limpia nombres de archivo para evitar errores en el sistema de archivos."""
-    return re.sub(r'[\\/*?:"<>|]', "", filename)
+        logger.warning(f"⚠️ No se pudo guardar el archivo de bloqueo para {article_id}: {e}")
 
 def prepare_text_for_video(text):
-    """
-    Formatea el título para la pantalla (Lower Third).
-    Usa 'wrapper' para cortar líneas.
-    """
-    # 1. Limpieza de caracteres extraños
+    """Limpia el título para que FFmpeg lo pueda renderizar sin errores de caracteres raros"""
+    # Quitamos caracteres que puedan romper FFmpeg
     text = re.sub(r'[^\w\s\.\,\!\?\-áéíóúÁÉÍÓÚñÑ]', '', text)
     text = text.replace("'", "").replace('"', "").replace(":", "")
-
-    # 2. WRAP: 45 caracteres por línea (para dejar espacio al presentador a la derecha)
+    
+    # Ajustamos el ancho del texto para que no se salga de la pantalla
     wrapper = textwrap.TextWrapper(width=45) 
     word_list = wrapper.wrap(text=text)
     
-    # 3. Máximo 3 líneas para no tapar demasiado la pantalla
+    # Limitamos a 3 líneas máximo en la pantalla
     if len(word_list) > 3:
-        final_text = "\n".join(word_list[:3]) + "..."
-    else:
-        final_text = "\n".join(word_list)
-    
-    return final_text
-
-# ==========================================
-# 4. GESTOR DE DESCARGAS (PLAN B MILITAR)
-# ==========================================
+        return "\n".join(word_list[:3]) + "..."
+    return "\n".join(word_list)
 
 def download_image_robust(url, save_path, retries=3):
-    """
-    Descarga imágenes asegurando que no fallen.
-    Si requests falla, usa CURL del sistema.
-    """
+    """Descarga la imagen de la noticia con alta tolerancia a fallos"""
     logger.info(f"⬇️ Iniciando descarga de imagen: {url}")
     
     for attempt in range(retries):
-        # INTENTO PYTHON (REQUESTS)
         try:
-            response = requests.get(url, timeout=15, verify=False)
-            if response.status_code == 200:
-                with open(save_path, 'wb') as f:
-                    f.write(response.content)
-                if os.path.getsize(save_path) > 100:
-                    return True
-        except Exception as e:
-            logger.warning(f"⚠️ Intento {attempt+1} fallido (Requests): {e}")
-
-        # INTENTO CURL (LINUX SYSTEM)
-        try:
-            cmd = [
-                "curl", "-L", "-k",
-                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                "--retry", "2",
-                "-o", save_path, url
-            ]
+            # INTENTO 1: Usamos CURL porque es más rápido y estable en Linux
+            cmd = ["curl", "-L", "-k", "--retry", "2", "-o", save_path, url]
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # Verificamos que la imagen realmente pesa algo (no está vacía)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 100:
                 return True
+                
         except Exception as e:
-            logger.warning(f"⚠️ Intento {attempt+1} fallido (CURL): {e}")
-            
-        time.sleep(1) # Esperar un poco antes de reintentar
-
-    logger.error("❌ ERROR FATAL: No se pudo descargar la imagen tras todos los intentos.")
+            logger.warning(f"⚠️ Intento {attempt+1} fallido con curl. Usando método alternativo.")
+            try:
+                # INTENTO 2: Fallback usando Python Requests
+                time.sleep(1)
+                r = requests.get(url, verify=False, timeout=15)
+                if r.status_code == 200:
+                    with open(save_path, 'wb') as f: 
+                        f.write(r.content)
+                    return True
+            except Exception as e2:
+                logger.error(f"❌ Error también en Requests: {e2}")
+                pass
+                
+    logger.error("❌ No se pudo descargar la imagen después de todos los intentos.")
     return False
 
-# ==========================================
-# 5. GENERADOR DE AUDIO (TTS ASÍNCRONO)
-# ==========================================
+
+# ==============================================================================
+# 4. GENERADORES DE AUDIO (TTS) Y VIDEO (FFMPEG)
+# ==============================================================================
 
 async def generate_audio_edge(text, output_file):
-    """
-    Genera audio con voz de locutor hombre usando Edge-TTS.
-    Voz: es-AR-TomasNeural.
-    """
+    """Genera la voz en off utilizando Microsoft Edge TTS"""
     try:
-        voice = 'es-AR-TomasNeural' 
-        communicate = edge_tts.Communicate(text, voice)
+        logger.info("🎙️ Generando audio TTS...")
+        communicate = edge_tts.Communicate(text, 'es-AR-TomasNeural')
         await communicate.save(output_file)
         
-        # Verificar que el archivo se creó correctamente
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 100:
-            return True
-        return False
+        # Validar que el audio se creó correctamente
+        return os.path.exists(output_file) and os.path.getsize(output_file) > 100
     except Exception as e:
-        logger.error(f"❌ Error generando TTS: {e}")
+        logger.error(f"❌ Error fatal en generación TTS: {e}")
         return False
-
-# ==========================================
-# 6. MOTOR DE VIDEO (FFMPEG IZQUIERDA)
-# ==========================================
 
 def render_video_ffmpeg(image_path, audio_path, text_title, output_path):
-    """
-    Genera video 1280x720 Horizontal.
-    - ALINEACIÓN TEXTO: Izquierda (x=50).
-    - FONDO: Ajustado sin deformar.
-    - PRESENTADOR: Solidez mejorada.
-    """
+    """Renderiza el video final uniendo la imagen de fondo, el presentador y el audio"""
     presenter_path = os.path.join(ASSETS_DIR, PRESENTER_FILENAME)
-    
-    # Validar existencia del presentador
-    if not os.path.exists(presenter_path):
-        logger.error(f"❌ FALTA VIDEO PRESENTADOR: {presenter_path}")
-        return False
-    
-    # Fuente (Linux) o Fallback
     font_path = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
-    if not os.path.exists(font_path):
-        font_path = "Arial"
-
-    # Prepara el texto con saltos de línea
     clean_title = prepare_text_for_video(text_title)
 
-    # --- COMANDO FFMPEG COMPLEJO AJUSTADO ---
-    # x=50 : Pegado a la izquierda (margen de 50 píxeles).
-    # y=h-180 : En la parte inferior.
-    # text_align=left : Fuerza alineación izquierda del bloque.
-    
+    if not os.path.exists(presenter_path):
+        logger.error(f"❌ No se encontró el video del presentador en la ruta: {presenter_path}")
+        return False
+
+    # Comando ultra complejo de FFmpeg para lograr el efecto profesional
     cmd = [
         "ffmpeg", "-y",
-        "-loop", "1", "-i", image_path,       # 0: Imagen
-        "-i", presenter_path,                 # 1: Presentador
-        "-i", audio_path,                     # 2: Audio
+        "-loop", "1", "-i", image_path,
+        "-i", presenter_path,
+        "-i", audio_path,
         "-filter_complex",
         (
-# 1. FONDO: Escala INTELIGENTE (Cover) para que nunca falte imagen
             f"[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720:(iw-ow)/2:(ih-oh)/2[bg];"
-            
-            # 2. PRESENTADOR: Escalar altura a 720 (ancho auto) y Chroma Key
             f"[1:v]scale=-1:720[v_scaled];"
             f"[v_scaled]chromakey={CHROMA_COLOR}:{CHROMA_SIMILARITY}:{CHROMA_BLEND}[v_keyed];"
-            
-            # 3. BUCLE PING-PONG (Efecto espejo para continuidad)
             f"[v_keyed]split[main][reverse_copy];"
             f"[reverse_copy]reverse[v_reversed];"
             f"[main][v_reversed]concat=n=2:v=1:a=0[boomerang];"
             f"[boomerang]loop=-1:size=32767:start=0[presenter_loop];"
-            
-            # 4. COMPOSICIÓN (Presentador Centrado sobre fondo)
             f"[bg][presenter_loop]overlay=(W-w)/2:(H-h)/2:shortest=1[comp];"
-            
-# 5. TEXTO A LA IZQUIERDA (SIN FONDO, MÁS ABAJO)
-            # x=30 (Pegado izquierda), y=h-100 (Bien abajo)
             f"[comp]drawtext=fontfile='{font_path}':text='{clean_title}':"
             f"fontcolor=white:fontsize=40:line_spacing=12:"
-            f"shadowcolor=black@1.0:shadowx=4:shadowy=4:" # Sombra fuerte para que se lea sin el fondo
+            f"shadowcolor=black@1.0:shadowx=4:shadowy=4:"
             f"x=30:y=h-145[outv]"
         ),
-        "-map", "[outv]",
-        "-map", "2:a",
-        "-c:v", "libx264",
-        "-preset", "ultrafast", # Optimizado para t3.micro
-        "-r", "24",           # 24 FPS Standard
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-shortest",
-        output_path
+        "-map", "[outv]", "-map", "2:a",
+        "-c:v", "libx264", "-preset", "ultrafast", "-r", "24",
+        "-c:a", "aac", "-b:a", "128k", "-shortest", output_path
     ]
 
     try:
-        logger.info("🎬 Renderizando Video (Texto Izquierda)...")
-        subprocess.run(cmd, check=True)
-        # Validar que el archivo resultante exista y tenga peso
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-            return True
+        # TIMEOUT CONFIGURADO EN 600s (10 minutos) PARA EVITAR BLOQUEOS DEL SERVIDOR
+        logger.info("🎬 Iniciando renderizado de Video en FFmpeg (Timeout: 600s)...")
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
+        
+        # Validamos que el video final se creó correctamente
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 1000
+        
+    except subprocess.TimeoutExpired:
+        logger.error("❌ ERROR CRÍTICO: El renderizado superó los 10 minutos (Timeout). Cancelando proceso para no saturar el servidor.")
         return False
-    except subprocess.CalledProcessError as e:
-        logger.error(f"❌ Error Crítico FFmpeg: {e}")
+    except subprocess.CalledProcessError as err:
+        logger.error(f"❌ Fallo interno en FFmpeg (Posible falta de RAM o archivo corrupto).")
         return False
 
-# ==========================================
-# 7. GESTOR DE YOUTUBE (DESCRIPCIÓN COMPLETA + ROTACIÓN)
-# ==========================================
+
+# ==============================================================================
+# 5. GESTIÓN Y SUBIDA A YOUTUBE (CON ROTACIÓN)
+# ==============================================================================
 
 def get_authenticated_service(account_index):
-    """Autenticación y rotación de tokens."""
+    """Obtiene el servicio autenticado de YouTube para una cuenta específica"""
     creds = None
     token_file = f'token_{account_index}.json'
     client_secrets_file = f'client_secret_{account_index}.json'
 
-    # Verificar existencia de secretos
-    if not os.path.exists(client_secrets_file):
-        # logger.warning(f"⚠️ Falta archivo secreto para cuenta {account_index}")
+    # Verificamos si los archivos de Google existen
+    if not os.path.exists(client_secrets_file) and not os.path.exists(token_file):
+        logger.error(f"❌ Faltan archivos de autenticación para la cuenta {account_index}")
         return None
 
-    # Cargar token existente
     if os.path.exists(token_file):
         try:
             creds = Credentials.from_authorized_user_file(token_file, SCOPES)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"⚠️ Error leyendo {token_file}: {e}")
             pass
 
-    # Refrescar token si es necesario
+    # Si el token expiró, intentamos refrescarlo automáticamente
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
                 with open(token_file, 'w') as token:
                     token.write(creds.to_json())
-            except Exception:
+            except Exception as e:
+                logger.error(f"❌ Error refrescando token {account_index}: {e}")
                 return None
         else:
             return None
 
     try:
         return build('youtube', 'v3', credentials=creds)
-    except Exception:
+    except Exception as e:
+        logger.error(f"❌ Error construyendo el servicio de YouTube: {e}")
         return None
 
-def upload_video(file_path, title, description, tags, category_id="25"): # 25 = News & Politics
-    """Subida con rotación de cuentas automática."""
+def upload_video(file_path, title, description, tags, category_id="25"):
+    """
+    Sube el video aplicando el sistema de Rotación Inteligente.
+    """
     
-    for account_index in range(MAX_ACCOUNTS):
-        logger.info(f"📡 Probando subida con Cuenta {account_index}...")
+    # 1. Obtenemos qué cuenta nos toca usar en este turno
+    start_index = get_next_account_index()
+
+    # 2. Bucle de subida (Si la cuenta asignada falla, intenta con las siguientes)
+    for i in range(MAX_ACCOUNTS):
+        # Fórmula matemática para rotar: 0,1,2,3 y volver a 0
+        account_index = (start_index + i) % MAX_ACCOUNTS
+        
+        logger.info(f"📡 Intentando subida con Cuenta {account_index}...")
         
         youtube = get_authenticated_service(account_index)
         if not youtube: 
-            continue # Si falla auth, prueba la siguiente
+            logger.warning(f"⚠️ Cuenta {account_index} no disponible o no configurada. Saltando.")
+            continue 
 
+        # Cuerpo de la petición a YouTube
         body = {
             'snippet': {
-                'title': title[:99], # Límite de YouTube 100 chars
-                'description': description[:4900], # Límite 5000 chars
+                'title': title[:99],
+                'description': description[:4900],
                 'tags': tags,
                 'categoryId': category_id
             },
             'status': {
-                'privacyStatus': 'public', # CAMBIAR A 'private' PARA PRUEBAS
+                'privacyStatus': 'public',
                 'selfDeclaredMadeForKids': False
             }
         }
@@ -353,111 +353,136 @@ def upload_video(file_path, title, description, tags, category_id="25"): # 25 = 
             request = youtube.videos().insert(part=','.join(body.keys()), body=body, media_body=media)
             
             response = None
-            logger.info("🚀 Subiendo video...")
+            logger.info("🚀 Enviando paquete de video a los servidores de YouTube...")
+            
             while response is None:
                 status, response = request.next_chunk()
-                if status:
-                    # Progreso en consola (opcional)
-                    pass
-
+            
             video_id = response.get('id')
-            logger.info(f"✅ SUBIDA EXITOSA: https://youtu.be/{video_id}")
+            logger.info(f"✅ ¡SUBIDA EXITOSA! El video está en la Cuenta {account_index}: https://youtu.be/{video_id}")
             return video_id
 
         except HttpError as e:
+            # Si nos da error 403 (Cuota llena), logueamos y pasamos a la siguiente cuenta
             if e.resp.status in [403, 429] and "quotaExceeded" in e.content.decode('utf-8'):
-                logger.warning(f"⚠️ Cuota llena en Cuenta {account_index}. Cambiando...")
+                logger.warning(f"⚠️ CUOTA LLENA en Cuenta {account_index}. Pasando al siguiente canal de emergencia.")
                 continue
             else:
-                logger.error(f"❌ Error HTTP Cuenta {account_index}: {e}")
+                logger.error(f"❌ Error HTTP en subida de Cuenta {account_index}: {e}")
         except Exception as e:
-            logger.error(f"❌ Error inesperado Cuenta {account_index}: {e}")
+            logger.error(f"❌ Error general inesperado en Cuenta {account_index}: {e}")
 
-    logger.error("❌ ERROR CRÍTICO: Todas las cuentas fallaron.")
+    logger.error("❌ ERROR CRÍTICO EN SUBIDA: Se agotaron todas las cuentas disponibles.")
     return None
 
-# ==========================================
-# 8. ORQUESTADOR PRINCIPAL
-# ==========================================
+
+# ==============================================================================
+# 6. ORQUESTADOR PRINCIPAL (LA FUNCIÓN MAESTRA)
+# ==============================================================================
 
 def process_video_task(text_content, title, image_url, article_id, article_url=""):
     """
-    Función Principal (Entry Point).
+    Esta es la función que manda a llamar app.py. Controla todo el ciclo de vida de la noticia.
     """
-    start_time = time.time()
-    
-    logger.info(f"⚡ TAREA RECIBIDA: {article_id}")
+    logger.info(f"⚡ INICIANDO TAREA MAESTRA PARA ID: {article_id}")
 
-    # 1. Verificar si ya se hizo (Anti-Duplicados)
+    # Filtro de seguridad inicial
     if is_already_processed(article_id):
-        logger.warning(f"🛑 Tarea {article_id} ignorada (Ya procesada).")
+        logger.info("⏭️ Esta noticia ya fue procesada anteriormente.")
         return "ALREADY_PROCESSED"
 
+    # Definimos rutas únicas para los archivos temporales de esta tarea
     unique_id = uuid.uuid4().hex[:8]
     raw_img_path = os.path.join(TEMP_IMG, f"{unique_id}_raw.jpg")
     audio_path = os.path.join(TEMP_AUDIO, f"{unique_id}.mp3")
     final_video_path = os.path.join(OUTPUT_DIR, f"{article_id}.mp4")
+    
+    # LISTA DE BASURA A BORRAR AL FINALIZAR
+    files_to_clean = [raw_img_path, audio_path, final_video_path]
 
-    try:
-        # PASO 1: Descargar Imagen
+    try: 
+        # ---------------------------------------------------------
+        # PASO 1: IMAGEN
+        # ---------------------------------------------------------
         if not download_image_robust(image_url, raw_img_path): 
+            logger.error("Fallo al descargar la imagen. Abortando tarea.")
             return None
 
-        # PASO 2: Generar Audio (CORRECCIÓN APLICADA: asyncio.run)
-        logger.info("🎙️ Generando audio...")
+        # ---------------------------------------------------------
+        # PASO 2: AUDIO
+        # ---------------------------------------------------------
+        text_to_read = text_content if text_content and len(text_content) > 10 else title
         try:
-            # Seleccionar texto a leer (Contenido o Título)
-            text_to_read = text_content if text_content and len(text_content) > 10 else title
-            
-            # --- AQUÍ ESTABA EL ERROR, AHORA ESTÁ CORREGIDO ---
             asyncio.run(generate_audio_edge(text_to_read, audio_path))
-            
-        except Exception as e:
-            logger.error(f"❌ Error TTS: {e}")
+        except Exception as e_tts:
+            logger.error(f"Error en bloque de TTS asyncio: {e_tts}")
             return None
 
-        # PASO 3: Renderizar Video (Texto Izquierda)
-        success = render_video_ffmpeg(raw_img_path, audio_path, title, final_video_path)
-        if not success: 
+        # ---------------------------------------------------------
+        # PASO 3: RENDERIZADO DE VIDEO (FFMPEG)
+        # ---------------------------------------------------------
+        if not render_video_ffmpeg(raw_img_path, audio_path, title, final_video_path): 
+            logger.error("Fallo durante el renderizado del video.")
             return None
 
-        # PASO 4: Preparar Descripción COMPLETA
-        # Cortamos a 4500 chars para dejar espacio a la URL
-        full_text_truncated = text_content[:4000] if text_content else title
+        # ---------------------------------------------------------
+        # PASO 4: CONSTRUCCIÓN DE LA DESCRIPCIÓN 
+        # ---------------------------------------------------------
+        logger.info("✍️ Construyendo descripción para YouTube...")
         
-        description_final = f"{title}\n\n"
-        description_final += "------------------------------------------------\n"
-        description_final += f"{full_text_truncated}\n\n"
-        
-        # Añadir URL si existe
-        if article_url and str(article_url).strip() != "":
-            description_final += f"🔗 LEER NOTA COMPLETA AQUÍ:\n{article_url}\n\n"
+        # 4.1. LÓGICA DE LA URL (Debe ir ARRIBA y usar /articulo/)
+        if article_url and "http" in str(article_url):
+            final_link = article_url
         else:
-            description_final += "🔗 Visita nuestro sitio web para más detalles.\n\n"
+            # Si no hay URL de la API, la forzamos con la estructura correcta
+            final_link = f"https://www.noticias.lat/articulo/{article_id}"
             
-        description_final += "#noticias #actualidad #internacional"
+        desc = f"🔗 LEER NOTA COMPLETA AQUÍ:\n{final_link}\n\n"
+        
+        # 4.2. TÍTULO Y CUERPO (Limitado a 4000 caracteres por reglas de YouTube)
+        full_text_truncated = text_content[:4000] if text_content else title
+        desc += f"{title}\n\n"
+        desc += "------------------------------------------------\n"
+        desc += f"{full_text_truncated}\n\n"
 
-        # PASO 5: Subir a YouTube
-        tags = ["noticias", "actualidad", "ultimahora"]
-        video_id = upload_video(final_video_path, title, description_final, tags)
+        # 4.3. PUBLICIDAD (Relax Station)
+        desc += "🧘 ¿Estás estresado y quieres relajarte?\n"
+        desc += "👉 https://www.youtube.com/@DesdeRelaxStation/streams\n\n"
+
+        # 4.4. HASHTAGS GLOBALES
+        desc += "#noticias #actualidad #internacional"
+        
+        # ---------------------------------------------------------
+        # PASO 5: SUBIDA A YOUTUBE
+        # ---------------------------------------------------------
+        video_id = upload_video(final_video_path, title, desc, ["noticias"])
 
         if video_id:
+            # Marcamos como completado para que no se repita
             mark_as_processed(article_id, video_id)
-            
-            # Limpieza de archivos temporales
-            try:
-                if os.path.exists(raw_img_path): os.remove(raw_img_path)
-                if os.path.exists(audio_path): os.remove(audio_path)
-                if os.path.exists(final_video_path): os.remove(final_video_path)
-            except Exception:
-                pass
-            
-            total_time = time.time() - start_time
-            logger.info(f"🏁 Tarea completada en {total_time:.2f} segundos.")
+            logger.info(f"🏁 TAREA FINALIZADA CON ÉXITO: {video_id}")
             return video_id
-        else:
-            return None
-
-    except Exception as e:
-        logger.error(f"❌ Error Fatal en Proceso: {e}")
+            
         return None
+
+    except Exception as general_error:
+        logger.error(f"❌ Error Fatal no capturado en proceso general: {general_error}")
+        return None
+    
+    finally:
+        # =======================================================================
+        # 🧹 ZONA DE LIMPIEZA OBLIGATORIA (SE EJECUTA TENGA ÉXITO O FALLE)
+        # =======================================================================
+        logger.info("🧹 Iniciando proceso de limpieza para liberar memoria del servidor...")
+        for f in files_to_clean:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+                    logger.debug(f"Archivo eliminado: {f}")
+            except Exception as cleanup_error:
+                logger.warning(f"⚠️ No se pudo borrar el archivo temporal {f}: {cleanup_error}")
+        
+        # Invocamos al recolector de basura de Python para vaciar la RAM
+        import gc
+        gc.collect()
+        logger.info("✨ Limpieza completada.")
