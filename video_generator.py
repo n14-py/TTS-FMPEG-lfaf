@@ -173,6 +173,50 @@ def prepare_text_for_video(text):
     return "\n".join(word_list)
 
 def download_image_robust(url, save_path, retries=3):
+    """Descarga la imagen usando la URL original y proxies públicos como respaldo"""
+    import time
+    import requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    logger.info(f"⬇️ Iniciando descarga de imagen: {url}")
+    
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9",
+        "Referer": "https://www.google.com/"
+    }
+
+    # Estrategia: 1. Directo | 2. A través de Google | 3. A través de Weserv (CDN libre)
+    urls_to_try = [
+        url,
+        f"https://images1-focus-opensocial.googleusercontent.com/gadgets/proxy?container=focus&refresh=2592000&url={url}",
+        f"https://wsrv.nl/?url={url}"
+    ]
+
+    for current_url in urls_to_try:
+        logger.info(f"Intentando descargar desde: {current_url[:60]}...")
+        for attempt in range(2): # 2 intentos por cada ruta
+            try:
+                r = requests.get(current_url, headers=headers, verify=False, timeout=15)
+                
+                # Comprobamos que responda bien y que el archivo pese más de 1KB (evita descargar HTML de error)
+                if r.status_code == 200 and len(r.content) > 1000:
+                    with open(save_path, 'wb') as f: 
+                        f.write(r.content)
+                    logger.info("✅ ¡Imagen descargada con éxito!")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Fallo. Código: {r.status_code}, Tamaño: {len(r.content)} bytes.")
+            except Exception as e:
+                logger.warning(f"⚠️ Error de conexión: {str(e)[:50]}")
+            
+            time.sleep(2) # Pausa antes de reintentar
+            
+    logger.error("❌ No se pudo descargar la imagen ni usando proxies públicos.")
+    return False
     """Descarga la imagen de la noticia con alta tolerancia a fallos y simulación de navegador"""
     logger.info(f"⬇️ Iniciando descarga de imagen: {url}")
     
