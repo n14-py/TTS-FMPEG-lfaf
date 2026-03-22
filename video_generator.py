@@ -404,9 +404,17 @@ def process_video_task(text_content, title, image_url, article_id, article_url="
         # ---------------------------------------------------------
         # PASO 1: IMAGEN
         # ---------------------------------------------------------
+# ---------------------------------------------------------
+        # PASO 1: IMAGEN (Con Salvavidas Anti-Errores)
+        # ---------------------------------------------------------
         if not download_image_robust(image_url, raw_img_path): 
-            logger.error("Fallo al descargar la imagen. Abortando tarea.")
-            return None
+            logger.warning("⚠️ La imagen original está bloqueada o rota. Usando imagen de respaldo...")
+            # Si falla, usamos un fondo genérico de noticias azul oscuro
+            fallback_url = "https://noticias.lat/favicon.png"
+            
+            if not download_image_robust(fallback_url, raw_img_path, retries=1):
+                logger.error("❌ Fallo incluso la imagen de respaldo. Abortando.")
+                return None
 
         # ---------------------------------------------------------
         # PASO 2: AUDIO
