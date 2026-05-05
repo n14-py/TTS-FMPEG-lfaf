@@ -122,7 +122,7 @@ def get_authenticated_service(account_index):
         logger.error(f"  [YouTube Uploader] Error construyendo el servicio YouTube: {e}")
         return None
 
-def upload_video(file_path, title, description, tags, category_id="25"):
+def upload_video(file_path, title, description, tags, category_id="25", thumbnail_path=None):
     """
     Intenta subir el video. Si la cuenta actual se quedó sin cuota (403),
     salta automáticamente a la siguiente cuenta en el loop.
@@ -166,7 +166,34 @@ def upload_video(file_path, title, description, tags, category_id="25"):
                 
             video_id = response.get('id')
             logger.info(f"  [YouTube Uploader] ¡ÉXITO! Video publicado: https://youtu.be/{video_id}")
+            
+            # ==========================================
+            # NUEVO: SUBIDA DE MINIATURA (THUMBNAIL)
+            # ==========================================
+            # Si no nos pasan la ruta de la imagen, intentamos deducirla 
+            # asumiendo que se llama igual que el video pero termina en .jpg
+            if not thumbnail_path:
+                posible_jpg = file_path.rsplit('.', 1)[0] + '.jpg'
+                if os.path.exists(posible_jpg):
+                    thumbnail_path = posible_jpg
+
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                try:
+                    logger.info(f"  [YouTube Uploader] Subiendo miniatura: {os.path.basename(thumbnail_path)}...")
+                    youtube.thumbnails().set(
+                        videoId=video_id,
+                        media_body=MediaFileUpload(thumbnail_path)
+                    ).execute()
+                    logger.info("  [YouTube Uploader] ¡Miniatura aplicada con éxito!")
+                except Exception as e:
+                    logger.warning(f"  [YouTube Uploader] Falló la subida de la miniatura: {e}")
+            else:
+                logger.warning("  [YouTube Uploader] No se encontró ninguna miniatura para subir.")
+            # ==========================================
+
             return video_id
+        
+        
             
         except HttpError as e:
             if e.resp.status in [403, 429] and "quotaExceeded" in e.content.decode('utf-8'):
