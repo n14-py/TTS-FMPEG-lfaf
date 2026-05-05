@@ -21,7 +21,7 @@ def formatear_texto_intro(texto, max_chars):
     if not texto:
         return ""
     # Escapar comillas simples
-    texto = texto.replace("'", "\u2019")
+    texto = texto.replace("'", "\u2019").replace(":", "\\:")
     wrapper = textwrap.TextWrapper(width=max_chars)
     word_list = wrapper.wrap(text=texto)
     # Las intros suelen tener 1 o 2 líneas máximo para mayor impacto
