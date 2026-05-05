@@ -1,168 +1,178 @@
+# -*- coding: utf-8 -*-
+"""
+==============================================================================
+APP.PY (Servidor Flask y Controlador de Tareas)
+==============================================================================
+Este es el punto de entrada de la aplicación. Levanta un servidor web que
+escucha las peticiones de Node.js, ejecuta el orquestador en segundo plano
+y maneja los bloqueos (Locks) para no saturar el servidor.
+"""
+
 import os
 import threading
 import gc
 import logging
 import requests
-import json
 from flask import Flask, request, jsonify
 
-# Importamos la función maestra y el chequeo de duplicados
-from video_generator import process_video_task, is_already_processed
+# Importamos nuestros módulos maestros
+import main_orchestrator
+import youtube_uploader
 
-# --- CONFIGURACIÓN DE LOGS ---
-# Formato detallado para CloudWatch / Docker logs
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# ==============================================================================
+# CONFIGURACIÓN INICIAL
+# ==============================================================================
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Cargar variables de entorno
-from dotenv import load_dotenv
-load_dotenv()
-
-ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
-# URL de tu API principal (Backend en Render) para los Webhooks
+# Variables de entorno (Las mismas que tenías en tu .env original)
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "secreto123456")
 MAIN_API_URL = os.getenv("MAIN_API_URL", "https://lfaftechapi.onrender.com")
+PORT = int(os.getenv("PORT", 3001))
 
 app = Flask(__name__)
 
-# --- SEMÁFORO DE PROCESAMIENTO ---
-# Evita que el t3.micro explote procesando 2 videos a la vez.
+# ==============================================================================
+# SEMÁFORO DE PROCESAMIENTO (ANTI-COLAPSO)
+# ==============================================================================
+# Este "Lock" asegura que solo se procese 1 video a la vez en todo el servidor.
 processing_lock = threading.Lock()
 
 def _check_auth():
-    """Verifica que la petición venga de tu API Admin."""
+    """Verifica que la petición venga de tu API en Node.js (Seguridad)."""
     api_key = request.headers.get('x-api-key')
-    if not api_key or api_key != ADMIN_API_KEY:
-        return False
-    return True
+    return api_key == ADMIN_API_KEY
 
-# --- RUTA 1: HEALTHCHECK (AWS lo usa para saber si estás vivo) ---
+# ==============================================================================
+# RUTAS DE LA API
+# ==============================================================================
+
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "server": "TTS-Worker-V3-Promo"}), 200
+    """Ruta para que Render sepa que el servidor está vivo."""
+    return jsonify({"status": "healthy", "server": "Noticias.lat Video Factory V4"}), 200
 
-# --- RUTA 2: GENERACIÓN DE VIDEO ---
 @app.route('/generate_video', methods=['POST'])
 def handle_generate_video():
-    # 1. Seguridad
-    if not _check_auth():
-        logger.warning(f"⛔ Intento de acceso no autorizado desde {request.remote_addr}")
-        return jsonify({"error": "No autorizado"}), 403
-
-    # 2. Validación de Datos
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Sin cuerpo JSON"}), 400
-
-    # Extraemos datos
-    article_id = data.get('article_id')
-    image_url = data.get('image_url')
-    text_content = data.get('text')
-    title = data.get('title')
+    """Recibe el JSON con las escenas, las valida y encola el trabajo."""
     
-    # IMPORTANTE: Intentamos obtener la URL de varias formas por si cambia el nombre en la API
-    article_url = data.get('url') or data.get('article_url') or data.get('link') or ""
+    # 1. Seguridad básica
+    if not _check_auth():
+        logger.warning(f"  [API] Intento de acceso no autorizado desde {request.remote_addr}")
+        return jsonify({"error": "No autorizado. API Key inválida."}), 403
 
-    # Validamos lo mínimo indispensable
-    if not all([article_id, image_url, text_content, title]):
-        missing = [k for k in ['article_id', 'image_url', 'text', 'title'] if not data.get(k)]
-        return jsonify({"error": f"Faltan datos: {', '.join(missing)}"}), 400
+    # 2. Obtener y validar el JSON
+    payload = request.get_json()
+    if not payload:
+        return jsonify({"error": "No se envió un cuerpo JSON válido."}), 400
 
-    # 3. FILTRO ANTI-BUCLE (Si ya existe, respondemos 200 OK para que la API pare)
-    if is_already_processed(article_id):
-        logger.info(f"⏭️ Tarea {article_id} ya existe en historial. Respondiendo OK.")
+    article_id = payload.get('article_id')
+    scenes = payload.get('scenes')
+    youtube_title = payload.get('youtube_title', 'Noticia de Última Hora')
+    youtube_desc = payload.get('youtube_description', 'Mira la noticia completa en Noticias.lat')
+    youtube_tags = payload.get('youtube_tags', ['noticias', 'actualidad'])
+
+    if not article_id or not scenes:
+        return jsonify({"error": "Faltan datos obligatorios: article_id o scenes."}), 400
+
+    # 3. Filtro Anti-Bucle (Revisar si ya se subió a YouTube)
+    if youtube_uploader.is_already_processed(article_id):
+        logger.info(f"  [API] Tarea {article_id} ignorada. Ya existe en el historial.")
         return jsonify({
-            "message": "El video ya fue generado anteriormente.",
+            "message": "El video ya fue generado y subido anteriormente.",
             "status": "completed",
             "article_id": article_id
         }), 200
 
-    # 4. INTENTO DE PROCESAMIENTO (Lock)
+    # 4. Intentar adquirir el control del servidor (Lock)
     if processing_lock.acquire(blocking=False):
-        try:
-            logger.info(f"🔒 [Lock Adquirido] Iniciando tarea para ID: {article_id}")
-            
-            # Definimos la tarea en segundo plano
-            def background_task():
-                try:
-                    # --- LLAMADA AL GENERADOR ---
-                    # Pasamos la URL explícita aquí
-                    video_id = process_video_task(text_content, title, image_url, article_id, article_url)
+        logger.info(f"  [API] [Lock Adquirido] Iniciando producción para ID: {article_id}")
+        
+        # ----------------------------------------------------------------------
+        # HILO EN SEGUNDO PLANO (Background Task)
+        # ----------------------------------------------------------------------
+        def background_task():
+            try:
+                # Paso A: Fabricar el video (Llama al orquestador)
+                video_path = main_orchestrator.process_video_payload(payload)
+                
+                # Paso B: Subir a YouTube si se fabricó bien
+                if video_path and os.path.exists(video_path):
+                    logger.info("  [Background] Video listo. Iniciando subida a YouTube...")
+                    youtube_id = youtube_uploader.upload_video(
+                        file_path=video_path,
+                        title=youtube_title,
+                        description=youtube_desc,
+                        tags=youtube_tags
+                    )
                     
-                    # --- MANEJO DE RESULTADOS ---
-                    
-                    # CASO A: ÉXITO (Tenemos ID de YouTube)
-                    if video_id and video_id != "ALREADY_PROCESSED":
-                        logger.info(f"📞 ÉXITO. Notificando a API Principal: {video_id}")
-                        try:
-                            # Webhook de éxito
-                            webhook_url = f"{MAIN_API_URL}/api/articles/video_complete"
-                            payload = {
-                                "articleId": article_id,
-                                "youtubeId": video_id
-                            }
-                            headers = {"x-api-key": ADMIN_API_KEY}
-                            
-                            r = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
-                            if r.status_code == 200:
-                                logger.info("✅ API Principal confirmó recepción.")
-                            else:
-                                logger.warning(f"⚠️ API respondió {r.status_code}: {r.text}")
-                                
-                        except Exception as e:
-                            logger.error(f"❌ Error de conexión al notificar éxito: {e}")
+                    if youtube_id:
+                        youtube_uploader.mark_as_processed(article_id, youtube_id)
+                        _notificar_webhook_node("video_complete", article_id, youtube_id)
+                    else:
+                        logger.error("  [Background] Falló la subida a YouTube.")
+                        _notificar_webhook_node("video_failed", article_id, error="YouTube Upload Failed")
+                else:
+                    logger.error("  [Background] El orquestador no devolvió un video válido.")
+                    _notificar_webhook_node("video_failed", article_id, error="Video Generation Failed")
 
-                    # CASO B: FALLO (Timeout, Error de Render, etc.)
-                    elif video_id is None:
-                        logger.warning(f"⚠️ FALLO CRÍTICO en tarea {article_id}. Notificando error para cancelar reintentos.")
-                        try:
-                            # Webhook de fallo (ROMPE EL BUCLE INFINITO)
-                            webhook_url = f"{MAIN_API_URL}/api/articles/video_failed"
-                            payload = {
-                                "articleId": article_id, 
-                                "error": "Worker Error: Render Failed or Timeout"
-                            }
-                            headers = {"x-api-key": ADMIN_API_KEY}
-                            requests.post(webhook_url, json=payload, headers=headers, timeout=10)
-                            logger.info("✅ API avisada del fallo.")
-                        except Exception as e:
-                            logger.error(f"❌ Error al notificar fallo: {e}")
+            except Exception as e:
+                logger.error(f"  [Background] Error fatal en hilo de procesamiento: {e}")
+                _notificar_webhook_node("video_failed", article_id, error=str(e))
+                
+            finally:
+                # ¡CRÍTICO! Liberar el servidor para la siguiente noticia
+                processing_lock.release()
+                logger.info(f"  [API] [Lock Liberado] Servidor listo para nueva tarea.")
+                gc.collect()
 
-                except Exception as e:
-                    logger.error(f"❌ Error fatal no capturado en hilo: {e}")
-                finally:
-                    # IMPORTANTE: Liberar el Lock siempre
-                    processing_lock.release()
-                    logger.info(f"🔓 [Lock Liberado] Tarea finalizada.")
-                    # Limpieza agresiva de memoria RAM
-                    gc.collect()
+        # Lanzar el hilo
+        thread = threading.Thread(target=background_task)
+        thread.daemon = True
+        thread.start()
 
-            # Lanzamos el hilo
-            thread = threading.Thread(target=background_task)
-            thread.daemon = True 
-            thread.start()
-
-            # Respondemos RÁPIDO que aceptamos el trabajo
-            return jsonify({
-                "message": "Tarea aceptada. Procesando en background.",
-                "status": "processing",
-                "article_id": article_id
-            }), 202
-
-        except Exception as e:
-            processing_lock.release()
-            logger.error(f"❌ Error al lanzar hilo: {e}")
-            return jsonify({"error": "Error interno del servidor"}), 500
-    else:
-        # 5. Servidor Ocupado
-        logger.warning(f"⚠️ Servidor ocupado. Rechazando tarea ID: {article_id}")
+        # 5. Respuesta inmediata a Node.js
         return jsonify({
-            "error": "El servidor está procesando otro video. Intente en 5 minutos."
+            "message": "Tarea matricial aceptada. Fabricando en segundo plano.",
+            "status": "processing",
+            "article_id": article_id
+        }), 202
+
+    else:
+        # Si el servidor ya está haciendo un video, rechaza la petición
+        logger.warning(f"  [API] Servidor ocupado. Rechazando ID: {article_id}")
+        return jsonify({
+            "error": "El servidor está procesando otro video. Reintente en unos minutos."
         }), 503
+
+# ==============================================================================
+# SISTEMA DE NOTIFICACIONES (WEBHOOKS)
+# ==============================================================================
+def _notificar_webhook_node(endpoint, article_id, youtube_id=None, error=None):
+    """
+    Se comunica de vuelta con tu API de Node.js para avisarle cómo terminó todo.
+    """
+    webhook_url = f"{MAIN_API_URL}/api/articles/{endpoint}"
+    headers = {"x-api-key": ADMIN_API_KEY}
+    
+    payload = {"articleId": article_id}
+    if youtube_id:
+        payload["youtubeId"] = youtube_id
+    if error:
+        payload["error"] = error
+
+    try:
+        r = requests.post(webhook_url, json=payload, headers=headers, timeout=15)
+        if r.status_code == 200:
+            logger.info(f"  [Webhook] API de Node.js notificada con éxito ({endpoint}).")
+        else:
+            logger.warning(f"  [Webhook] La API de Node.js respondió con error {r.status_code}: {r.text}")
+    except Exception as e:
+        logger.error(f"  [Webhook] Error de conexión al notificar a Node.js: {e}")
 
 @app.route('/', methods=['GET'])
 def index():
-    return "<h1>Noticias.lat Video Worker V3</h1><p>Sistema Operativo con Promo y Fix de URL.</p>"
+    return "<h1>Noticias.lat - Motor Matricial Activo</h1>", 200
 
 if __name__ == '__main__':
-    port = int(os.getenv("PORT", 3001))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=PORT)

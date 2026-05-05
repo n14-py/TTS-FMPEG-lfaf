@@ -6,7 +6,11 @@ from google.auth.transport.requests import Request
 
 # --- CONFIGURACIÓN ---
 # Estos son los permisos que pediremos (Subir videos y gestionar cuenta YouTube)
-SCOPES = ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.force-ssl']
+SCOPES = [
+    'https://www.googleapis.com/auth/youtube.upload', 
+    'https://www.googleapis.com/auth/youtube.force-ssl',
+    'https://www.googleapis.com/auth/yt-analytics.readonly'
+]
 
 # Lista de cuentas (Debe coincidir EXACTAMENTE con video_generator.py)
 ACCOUNTS = [
