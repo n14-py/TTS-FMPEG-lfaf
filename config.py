@@ -74,24 +74,24 @@ LAYOUT_CONFIG = {
     "intro_layout_05.mp4": {"texto_x": -1000, "texto_y": -1500, "color": "white", "font_size": 65, "max_letras_por_linea": 35},
 
     # --- HOMBRE ---
-    "hombre_layout_01.mp4": {"texto_x": 9,  "texto_y": 572, "color": "white", "font_size": 27, "max_letras_por_linea": 60},
+    "hombre_layout_01.mp4": {"texto_x": 9,  "texto_y": 570, "color": "white", "font_size": 25, "max_letras_por_linea": 60},
     "hombre_layout_02.mp4": {"texto_x": 333,  "texto_y": 557, "color": "white", "font_size": 30, "max_letras_por_linea": 58},
-    "hombre_layout_03.mp4": {"texto_x": 15,  "texto_y": 566,  "color": "yellow", "font_size": 30, "max_letras_por_linea": 25},
-    "hombre_layout_04.mp4": {"texto_x": 495,  "texto_y": 578, "color": "white", "font_size": 27, "max_letras_por_linea": 55},
+    "hombre_layout_03.mp4": {"texto_x": 15,  "texto_y": 566,  "color": "yellow", "font_size": 30, "max_letras_por_linea": 59},
+    "hombre_layout_04.mp4": {"texto_x": 495,  "texto_y": 570, "color": "white", "font_size": 25, "max_letras_por_linea": 55},
     "hombre_layout_05.mp4": {"texto_x": 107, "texto_y": 551, "color": "white", "font_size": 28, "max_letras_por_linea": 55},
 
     # --- MUJER ---
-    "mujer_layout_01.mp4": {"texto_x": 9,  "texto_y": 572, "color": "white", "font_size": 27, "max_letras_por_linea": 60},
+    "mujer_layout_01.mp4": {"texto_x": 9,  "texto_y": 570, "color": "white", "font_size": 25, "max_letras_por_linea": 60},
     "mujer_layout_02.mp4": {"texto_x": 333,  "texto_y": 557, "color": "white", "font_size": 30, "max_letras_por_linea": 58},
-    "mujer_layout_03.mp4": {"texto_x": 15,  "texto_y": 566,  "color": "yellow", "font_size": 30, "max_letras_por_linea": 25},
-    "mujer_layout_04.mp4": {"texto_x": 495,  "texto_y": 578, "color": "white", "font_size": 27, "max_letras_por_linea": 55},
+    "mujer_layout_03.mp4": {"texto_x": 15,  "texto_y": 566,  "color": "yellow", "font_size": 30, "max_letras_por_linea": 59},
+    "mujer_layout_04.mp4": {"texto_x": 495,  "texto_y": 570, "color": "white", "font_size": 25, "max_letras_por_linea": 55},
     "mujer_layout_05.mp4": {"texto_x": 107, "texto_y": 551, "color": "white", "font_size": 28, "max_letras_por_linea": 55},
 
     # --- GRÁFICOS (SIN PRESENTADOR) ---
-    "grafico_layout_01.mp4": {"texto_x": 9,  "texto_y": 572, "color": "white", "font_size": 27, "max_letras_por_linea": 60},
+    "grafico_layout_01.mp4": {"texto_x": 9,  "texto_y": 570, "color": "white", "font_size": 25, "max_letras_por_linea": 60},
     "grafico_layout_02.mp4": {"texto_x": 333,  "texto_y": 557,  "color": "white", "font_size": 30, "max_letras_por_linea": 58},
-    "grafico_layout_03.mp4": {"texto_x": 15,  "texto_y": 566, "color": "yellow", "font_size": 30, "max_letras_por_linea": 55},
-    "grafico_layout_04.mp4": {"texto_x": 495,  "texto_y": 578, "color": "white", "font_size": 27, "max_letras_por_linea": 40},
+    "grafico_layout_03.mp4": {"texto_x": 15,  "texto_y": 566, "color": "yellow", "font_size": 30, "max_letras_por_linea": 59},
+    "grafico_layout_04.mp4": {"texto_x": 495,  "texto_y": 570, "color": "white", "font_size": 25, "max_letras_por_linea": 55},
     "grafico_layout_05.mp4": {"texto_x": 107, "texto_y": 551, "color": "white", "font_size": 28, "max_letras_por_linea": 55},
 }
 

@@ -79,13 +79,10 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
     cmd = ["ffmpeg", "-y"]
 
     if es_video_fondo:
-        cmd.extend(["-t", "6", "-i", fondo_path])
-        # Ping-pong para videos de pexels
+        cmd.extend(["-stream_loop", "-1", "-i", fondo_path])
+        # Bucle normal limpio para videos de Pexels
         fondo_filtro_complex = (
-            f"[0:v]format=yuv420p,split=2[v1][v2];"
-            f"[v2]reverse[v2r];"
-            f"[v1][v2r]concat=n=2:v=1:a=0[pingpong];"
-            f"[pingpong]loop=-1:240:0,"
+            f"[0:v]format=yuv420p,"
             f"scale={RESOLUTION_W}:{RESOLUTION_H}:force_original_aspect_ratio=increase,"
             f"crop={RESOLUTION_W}:{RESOLUTION_H}:(iw-ow)/2:(ih-oh)/2[bg];"
         )
@@ -163,9 +160,18 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
         logger.error(f"  [FFmpeg Pexels] Error: {e}")
         return False 
     finally:
-        # Borrar el archivo de texto temporal para mantener limpio el disco
+        # 1. Borrar el archivo de texto temporal para mantener limpio el disco
         if 'texto_path' in locals() and os.path.exists(texto_path):
             try:
                 os.remove(texto_path)
             except:
                 pass
+        
+        # 2. Borrar el video descargado de Pexels para que AWS no colapse
+        if 'fondo_path' in locals() and os.path.exists(fondo_path):
+            # ¡IMPORTANTE! Validamos que NO sea la imagen por defecto de tus assets
+            if "default_news_bg" not in fondo_path:
+                try:
+                    os.remove(fondo_path)
+                except Exception as e:
+                    logger.warning(f"  [Limpieza] No se pudo borrar el video de Pexels: {e}")

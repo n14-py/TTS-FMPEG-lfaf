@@ -44,33 +44,32 @@ def formatear_texto(texto, max_chars):
 # ==============================================================================
 def generar_movimiento_camara_imagen():
     """
-    Motor Ken Burns: Elige al azar un movimiento de cámara ultra lento 
-    y cinematográfico para las imágenes estáticas de las noticias.
+    Motor Ken Burns: Movimiento constante, elegante y calculado para no detenerse nunca durante la escena.
     """
-    velocidad = "0.0005" # Movimiento muy sutil y profesional
+    velocidad = "0.001" # Toma aprox 16 segundos en llegar al límite (nunca se congelará)
     
     efectos = [
-        # 1. ZOOM IN (Acercamiento lento al centro)
-        f"[0:v]scale={RESOLUTION_W*2}:-1,zoompan=z='min(zoom+{velocidad},1.5)':d=7200:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}[bg];",
+        # 1. ZOOM IN LENTO Y CONSTANTE
+        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z='min(zoom+{velocidad},1.5)':d=7200:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=30[bg];",
         
-        # 2. ZOOM OUT (Alejamiento lento desde el centro)
-        f"[0:v]scale={RESOLUTION_W*2}:-1,zoompan=z='max(1.5-{velocidad},1)':d=7200:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}[bg];",
+        # 2. PANEO A LA DERECHA (x+1.5 es la velocidad perfecta para que se note y no se corte)
+        f"[0:v]scale=-2:{RESOLUTION_H*2},zoompan=z=1.2:d=7200:x='x+1.5':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=30[bg];",
         
-        # 3. PANEO DERECHA (Deslizamiento lento hacia la derecha)
-        f"[0:v]scale=-1:{RESOLUTION_H*2},zoompan=z=1.2:d=7200:x='x+1':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}[bg];",
+        # 3. PANEO A LA IZQUIERDA
+        f"[0:v]scale=-2:{RESOLUTION_H*2},zoompan=z=1.2:d=7200:x='if(eq(on,1),iw-iw/zoom,x-1.5)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=30[bg];",
         
-        # 4. PANEO IZQUIERDA (Deslizamiento lento hacia la izquierda)
-        f"[0:v]scale=-1:{RESOLUTION_H*2},zoompan=z=1.2:d=7200:x='max(1,iw/zoom-x)-1':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}[bg];"
+        # 4. PANEO HACIA ABAJO
+        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z=1.2:d=7200:x='iw/2-(iw/zoom/2)':y='y+1.5':s={RESOLUTION_W}x{RESOLUTION_H}:fps=30[bg];"
     ]
     
     efecto_elegido = random.choice(efectos)
-    logger.info(f"    [FX Motor] Aplicando movimiento de cámara: {efectos.index(efecto_elegido) + 1}")
+    logger.info(f"    [FX Motor] Aplicando movimiento constante: {efectos.index(efecto_elegido) + 1}")
     return efecto_elegido
+
 
 def generar_color_grading_video():
     """
-    Crea un Ping-Pong perfecto en la memoria sin crashear servidores pequeños.
-    Toma 6 segundos, los invierte (12s en total = 240 frames a 20fps) y los loopea.
+    Aplica Color Grading. El bucle normal se maneja desde el input (-stream_loop -1).
     """
     filtros_color = [
         "eq=contrast=1.05:saturation=1.1",     
@@ -82,17 +81,11 @@ def generar_color_grading_video():
     ]
     
     filtro_elegido = random.choice(filtros_color)
-    logger.info(f"    [FX Motor] Ping-Pong + Color Grading: {filtro_elegido}")
+    logger.info(f"    [FX Motor] Color Grading: {filtro_elegido}")
     
-    # split: duplica el video en v1 y v2
-    # reverse: invierte v2
-    # concat: une v1 y v2r (6s normal + 6s reversa)
-    # loop=-1:240:0: Loopea esos 240 frames (12 seg * 20 fps) de forma infinita
+    # Filtro limpio, sin reverse ni concat
     filtro_completo = (
-        f"[0:v]format=yuv420p,split=2[v1][v2];"
-        f"[v2]reverse[v2r];"
-        f"[v1][v2r]concat=n=2:v=1:a=0[pingpong];"
-        f"[pingpong]loop=-1:240:0," 
+        f"[0:v]format=yuv420p,"
         f"{filtro_elegido},"
         f"scale={RESOLUTION_W}:{RESOLUTION_H}:force_original_aspect_ratio=increase,"
         f"crop={RESOLUTION_W}:{RESOLUTION_H}:(iw-ow)/2:(ih-oh)/2[bg];"
@@ -142,9 +135,8 @@ def ensamblar_escena(fondo_path, overlay_path, audio_tts_path, bgm_path, sfx_pat
     cmd = ["ffmpeg", "-y"]
 
     if es_video_fondo:
-        # Quitamos el loop infinito de entrada y le decimos a FFmpeg 
-        # que solo lea los primeros 6 segundos del video de Pexels.
-        cmd.extend(["-t", "6", "-i", fondo_path])
+        # Bucle infinito normal, quitamos el "-t 6"
+        cmd.extend(["-stream_loop", "-1", "-i", fondo_path])
         fondo_filtro_complex = generar_color_grading_video()
     else:
         # Es una imagen (Foto de la noticia o Mapa)
@@ -158,15 +150,10 @@ def ensamblar_escena(fondo_path, overlay_path, audio_tts_path, bgm_path, sfx_pat
     cmd.extend(["-i", audio_tts_path])
 
     # 4. CONSTRUCCIÓN DEL CHROMA KEY Y OVERLAY FINAL
+# 4. CONSTRUCCIÓN DEL CHROMA KEY Y OVERLAY FINAL
     filter_complex = fondo_filtro_complex + (
-        f"[1:v]format=yuv420p,split=2[ov1][ov2];"
-        f"[ov2]reverse[ov2r];"
-        f"[ov1][ov2r]concat=n=2:v=1:a=0[pingpong_ov];"
-        # Escalar el resultado del ping-pong al tamaño de la resolución
-        f"[pingpong_ov]scale={RESOLUTION_W}:{RESOLUTION_H}[v_scaled];"
-        # Eliminar el verde (Chroma Key)
+        f"[1:v]format=yuv420p,scale={RESOLUTION_W}:{RESOLUTION_H}[v_scaled];"
         f"[v_scaled]chromakey={CHROMA_COLOR}:{CHROMA_SIMILARITY}:{CHROMA_BLEND}[v_keyed];"
-        # Juntar el fondo [bg] con el presentador sin fondo [v_keyed]
         f"[bg][v_keyed]overlay=(W-w)/2:(H-h)/2:shortest=1[comp];"
     )
 
