@@ -80,17 +80,17 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
 
     if es_video_fondo:
         cmd.extend(["-stream_loop", "-1", "-i", fondo_path])
-        # Bucle normal limpio para videos de Pexels
+        # Bucle normal limpio para videos de Pexels, forzando a 12 FPS para máxima velocidad
         fondo_filtro_complex = (
             f"[0:v]format=yuv420p,"
+            f"fps=12,"
             f"scale={RESOLUTION_W}:{RESOLUTION_H}:force_original_aspect_ratio=increase,"
             f"crop={RESOLUTION_W}:{RESOLUTION_H}:(iw-ow)/2:(ih-oh)/2[bg];"
         )
     else:
-        cmd.extend(["-loop", "1", "-framerate", str(FPS), "-i", fondo_path])
-        # Zoom sutil para imagen de respaldo
-        fondo_filtro_complex = f"[0:v]scale={RESOLUTION_W*2}:-1,zoompan=z='min(zoom+0.0005,1.5)':d=7200:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}[bg];"
-
+        cmd.extend(["-loop", "1", "-framerate", "12", "-i", fondo_path])
+        # Zoom sutil optimizado: d=450 (quita el límite infinito) y fijado a 12 FPS
+        fondo_filtro_complex = f"[0:v]scale={RESOLUTION_W*2}:-1,zoompan=z='min(zoom+0.0005,1.5)':d=450:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=12[bg];"
     # Entradas de FFmpeg
     cmd.extend(["-stream_loop", "-1", "-i", overlay_path])
     cmd.extend(["-i", audio_tts_path])

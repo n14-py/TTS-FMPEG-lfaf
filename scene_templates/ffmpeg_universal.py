@@ -50,16 +50,17 @@ def generar_movimiento_camara_imagen():
     
     efectos = [
         # 1. ZOOM IN CONSTANTE (15 fps)
-        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z='min(zoom+{velocidad},1.5)':d=7200:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
+    # 1. ZOOM IN CONSTANTE
+        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z='min(zoom+{velocidad},1.5)':d=450:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
         
-        # 2. PANEO A LA DERECHA (x+3 compensa la caída de fps)
-        f"[0:v]scale=-2:{RESOLUTION_H*2},zoompan=z=1.2:d=7200:x='x+3':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
+        # 2. PANEO A LA DERECHA
+        f"[0:v]scale=-2:{RESOLUTION_H*2},zoompan=z=1.2:d=450:x='x+3':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
         
         # 3. PANEO A LA IZQUIERDA
-        f"[0:v]scale=-2:{RESOLUTION_H*2},zoompan=z=1.2:d=7200:x='if(eq(on,1),iw-iw/zoom,x-3)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
+        f"[0:v]scale=-2:{RESOLUTION_H*2},zoompan=z=1.2:d=450:x='if(eq(on,1),iw-iw/zoom,x-3)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
         
         # 4. PANEO HACIA ABAJO
-        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z=1.2:d=7200:x='iw/2-(iw/zoom/2)':y='y+3':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];"
+        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z=1.2:d=450:x='iw/2-(iw/zoom/2)':y='y+3':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];"
     ]
     
     efecto_elegido = random.choice(efectos)

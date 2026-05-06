@@ -115,7 +115,7 @@ def renderizar_escena_mapa(ubicacion_texto, overlay_mp4_path, audio_tts_path, bg
     # [v_keyed]: Perforación del verde
 # 3. Construir el filtro complejo de FFmpeg
     filter_complex = (
-        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z='min(zoom+0.001,1.5)':d=7200:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=30[bg];"
+        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z='min(zoom+0.002,1.5)':d=450:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];"
         f"[1:v]scale=-1:{RESOLUTION_H}[v_scaled];"
         f"[v_scaled]chromakey={CHROMA_COLOR}:{CHROMA_SIMILARITY}:{CHROMA_BLEND}[v_keyed];"
         f"[bg][v_keyed]overlay=(W-w)/2:(H-h)/2:shortest=1[comp];"
