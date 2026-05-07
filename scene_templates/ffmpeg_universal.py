@@ -191,13 +191,15 @@ def ensamblar_escena(fondo_path, overlay_path, audio_tts_path, bgm_path, sfx_pat
         filter_complex = filter_complex.rstrip(';')
         audio_map = "-map 2:a"
 
-    # 7. COMPILACIÓN DEL COMANDO Y RENDERIZADO
+# 7. COMPILACIÓN DEL COMANDO Y RENDERIZADO
     cmd.extend([
+        "-filter_threads", "6",  # <--- DESPIERTA LOS 6 NÚCLEOS PARA EL FONDO VERDE
         "-filter_complex", filter_complex,
         "-map", "[vout]", 
         *audio_map.split(),
         "-c:v", "libx264", 
         "-preset", VIDEO_PRESET, 
+        "-threads", "6",         # <--- DESPIERTA LOS 6 NÚCLEOS PARA COMPRIMIR EL VIDEO
         "-r", str(FPS),
         "-c:a", "aac", 
         "-b:a", "128k", 
