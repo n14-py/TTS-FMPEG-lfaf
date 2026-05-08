@@ -18,6 +18,15 @@ from config import *
 
 logger = logging.getLogger(__name__)
 
+def obtener_duracion_audio(audio_path):
+    """Mide los segundos exactos del MP3"""
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
+    try:
+        resultado = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=True)
+        return float(resultado.stdout.strip()) + 0.4
+    except Exception:
+        return 25.0
+
 # ==============================================================================
 # FUNCIONES DE TEXTO
 # ==============================================================================
@@ -104,7 +113,8 @@ def ensamblar_escena(fondo_path, overlay_path, audio_tts_path, bgm_path, sfx_pat
     """
     La bestia que une todo.
     """
-    logger.info(f"  [FFmpeg Universal] Ensamblando escena de alta complejidad...")
+    duracion_exacta = obtener_duracion_audio(audio_tts_path)
+    logger.info(f"  [FFmpeg Universal] Ensamblando escena de alta complejidad (Duración: {duracion_exacta}s)...")
     logger.info(f"  --> Fondo: {os.path.basename(fondo_path)}")
     logger.info(f"  --> Overlay: {os.path.basename(overlay_path)}")
 
@@ -192,31 +202,44 @@ def ensamblar_escena(fondo_path, overlay_path, audio_tts_path, bgm_path, sfx_pat
         audio_map = "-map 2:a"
 
 # 7. COMPILACIÓN DEL COMANDO Y RENDERIZADO
+# 7. COMPILACIÓN DEL COMANDO Y RENDERIZADO
     cmd.extend([
-        "-filter_threads", "6",  # <--- DESPIERTA LOS 6 NÚCLEOS PARA EL FONDO VERDE
+        "-filter_threads", "2",  
         "-filter_complex", filter_complex,
         "-map", "[vout]", 
         *audio_map.split(),
         "-c:v", "libx264", 
-        "-preset", VIDEO_PRESET, 
-        "-threads", "6",         # <--- DESPIERTA LOS 6 NÚCLEOS PARA COMPRIMIR EL VIDEO
+        "-preset", "superfast", 
+        "-threads", "2",         
         "-r", str(FPS),
         "-c:a", "aac", 
         "-b:a", "128k", 
-        "-shortest", # El renderizado corta al milisegundo exacto que la IA termina la narración
+        "-t", str(duracion_exacta), 
         output_path
     ])
 
     try:
         logger.info(f"    [FFmpeg] Ejecutando renderizado de la escena...")
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
+        proceso = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proceso.communicate(timeout=200) 
         
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
+        if proceso.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             logger.info(f"  [FFmpeg Universal] ¡ÉXITO! Escena lista: {os.path.basename(output_path)}")
             return True
         else:
-            logger.error("  [FFmpeg Universal] Falla silenciosa: El archivo de salida está corrupto o vacío.")
             return False
+            
+    except subprocess.TimeoutExpired:
+        logger.error("  [FFmpeg Universal] TIMEOUT: Matando proceso Zombi...")
+        proceso.kill() 
+        proceso.communicate() 
+        return False
+    except Exception as e:
+        logger.error(f"  [FFmpeg Universal] Error inesperado en el sistema: {e}")
+        if 'proceso' in locals():
+            proceso.kill()
+            proceso.communicate()
+        return False
             
     except subprocess.TimeoutExpired:
         logger.error("  [FFmpeg Universal] TIMEOUT: La escena tardó demasiado. Abortando hilo.")

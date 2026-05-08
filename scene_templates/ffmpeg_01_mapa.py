@@ -18,6 +18,14 @@ from config import *
 
 logger = logging.getLogger(__name__)
 
+def obtener_duracion_audio(audio_path):
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
+    try:
+        resultado = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=True)
+        return float(resultado.stdout.strip()) + 0.4
+    except Exception:
+        return 25.0
+
 # Necesitas agregar tu API KEY de Mapbox en tu archivo .env y cargarla en config.py,
 # o ponerla directamente aquí si estás en fase de pruebas:
 MAPBOX_API_KEY = os.getenv("MAPBOX_API_KEY", "TU_CLAVE_MAPBOX_AQUI")
@@ -157,20 +165,32 @@ def renderizar_escena_mapa(ubicacion_texto, overlay_mp4_path, audio_tts_path, bg
         filter_complex = filter_complex.rstrip(';')
         audio_map = "-map 2:a"
         
+    duracion_exacta = obtener_duracion_audio(audio_tts_path)
+
     cmd.extend([
+        "-filter_threads", "2",
         "-filter_complex", filter_complex,
         "-map", "[vout]", 
         *audio_map.split(),
-        "-c:v", "libx264", "-preset", VIDEO_PRESET, "-r", str(FPS),
-        "-c:a", "aac", "-b:a", "128k", "-shortest", output_path
+        "-c:v", "libx264", "-preset", "superfast", "-threads", "2", "-r", str(FPS),
+        "-c:a", "aac", "-b:a", "128k", "-t", str(duracion_exacta), output_path
     ])
     
     # 5. Ejecutar el subproceso
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
-        return os.path.exists(output_path)
+        proceso = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proceso.communicate(timeout=200)
+        return proceso.returncode == 0 and os.path.exists(output_path)
+    except subprocess.TimeoutExpired:
+        logger.error("  [FFmpeg 01 Mapa] TIMEOUT: Matando zombi...")
+        proceso.kill()
+        proceso.communicate()
+        return False
     except Exception as e:
         logger.error(f"  [FFmpeg 01 Mapa] Fallo crítico renderizando: {e}")
+        if 'proceso' in locals():
+            proceso.kill()
+            proceso.communicate()
         return False
     finally:
         # 1. Borrar el archivo de texto temporal
