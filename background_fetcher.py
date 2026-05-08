@@ -30,22 +30,26 @@ _historial_pexels = []
 
 
 # ==============================================================================
-# 1. RECOLECTOR DE LA FOTO REAL DE LA NOTICIA
+# 1. RECOLECTOR DE LA FOTO REAL DE LA NOTICIA (MODO STEALTH BROWSER)
 # ==============================================================================
+
+# Pon aquí la URL directa a tu logo para el 1% de casos que fallen
+URL_LOGO_FALLBACK = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/No_image_available.svg/1024px-No_image_available.svg.png" 
+
 def sanitizar_imagen(ruta_archivo):
-    """Verifica que la imagen sea real y la limpia para que FFmpeg no se trabe"""
+    """Verifica silenciosamente si es una imagen real sin ensuciar la consola"""
     clean_path = ruta_archivo + "_clean.jpg"
     cmd_sanitize = [
-        "ffmpeg", "-y", "-v", "error",
+        "ffmpeg", "-y", "-v", "fatal", # 'fatal' oculta todos los errores feos de la consola
         "-i", ruta_archivo,
-        "-vf", "scale='min(1920,iw)':-2", # Achica imágenes gigantes
+        "-vf", "scale='min(1920,iw)':-2",
         "-frames:v", "1",
         clean_path
     ]
     try:
-        # Si esto falla, significa que NO era una imagen (era un HTML o archivo corrupto)
-        subprocess.run(cmd_sanitize, timeout=10, check=True)
-        os.replace(clean_path, ruta_archivo) # Guarda la imagen limpia
+        # Silenciamos la salida completamente
+        subprocess.run(cmd_sanitize, timeout=10, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.replace(clean_path, ruta_archivo) 
         return True
     except:
         if os.path.exists(ruta_archivo): os.remove(ruta_archivo)
@@ -54,42 +58,67 @@ def sanitizar_imagen(ruta_archivo):
 
 def obtener_imagen_noticia(url, save_path, retries=3):
     if not url or url == "":
-        return None
+        url = URL_LOGO_FALLBACK
         
-    logger.info(f"  [Fetcher] Descargando imagen de la noticia: {url[:50]}...")
+    logger.info(f"  [Fetcher] Descargando imagen (Modo Browser): {url[:50]}...")
     
+    # CABECERAS EXTREMAS: Engañamos a Cloudflare y Firewalls haciéndonos pasar por Chrome
+    headers_humanos = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Referer': 'https://www.google.com/',
+        'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'image',
+        'Sec-Fetch-Mode': 'no-cors',
+        'Sec-Fetch-Site': 'cross-site'
+    }
+
     for attempt in range(retries):
+        # INTENTO 1: Requests con camuflaje total
         try:
-            cmd = ["curl", "-L", "-k", "--retry", "2", "-o", save_path, url]
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
-                if sanitizar_imagen(save_path):
+            r = requests.get(url, headers=headers_humanos, verify=False, timeout=15)
+            if r.status_code == 200:
+                with open(save_path, 'wb') as f:
+                    f.write(r.content)
+                if os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
                     return save_path
-                else:
-                    logger.warning("  [Fetcher] ¡Imagen falsa/corrupta detectada y eliminada!")
-                    return None
-                
         except Exception:
-            logger.warning(f"  [Fetcher] CURL falló en intento {attempt+1}. Usando Requests...")
-            try:
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-                r = requests.get(url, headers=headers, verify=False, timeout=15)
-                if r.status_code == 200:
-                    with open(save_path, 'wb') as f:
-                        f.write(r.content)
-                    if os.path.getsize(save_path) > 1024:
-                        if sanitizar_imagen(save_path):
-                            return save_path
-                        else:
-                            logger.warning("  [Fetcher] ¡Imagen falsa/corrupta detectada y eliminada!")
-                            return None
-            except Exception as e:
-                logger.error(f"  [Fetcher] Error en Requests: {e}")
-                
+            pass
+
+        # INTENTO 2: Curl con camuflaje total
+        try:
+            cmd = [
+                "curl", "-L", "-k", "--retry", "2", "-s",
+                "-A", headers_humanos['User-Agent'],
+                "-H", f"Accept: {headers_humanos['Accept']}",
+                "-H", f"Referer: {headers_humanos['Referer']}",
+                "-o", save_path, url
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
+                return save_path
+        except Exception:
+            pass
+            
         time.sleep(1)
 
-    logger.error("  [Fetcher] Error definitivo: No se pudo descargar la imagen.")
+    # =========================================================================
+    # EL 1% DE FALLO: SALVAVIDAS ACTIVADO (LOGO NOTICIAS.LAT)
+    # =========================================================================
+    logger.warning(f"  [Fetcher] Bloqueo extremo detectado. Usando LOGO DE RESPALDO...")
+    try:
+        r_logo = requests.get(URL_LOGO_FALLBACK, verify=False, timeout=10)
+        if r_logo.status_code == 200:
+            with open(save_path, 'wb') as f:
+                f.write(r_logo.content)
+            if sanitizar_imagen(save_path):
+                return save_path
+    except Exception as e:
+        logger.error(f"  [Fetcher] Falló hasta el logo de respaldo: {e}")
+        
     return None
 
 
