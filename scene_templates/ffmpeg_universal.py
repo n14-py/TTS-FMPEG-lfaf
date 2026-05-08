@@ -53,27 +53,27 @@ def formatear_texto(texto, max_chars):
 # ==============================================================================
 def generar_movimiento_camara_imagen():
     """
-    Motor Ken Burns: Ajustado a 15 fps para máximo rendimiento en AWS.
+    Motor Ken Burns Optimizado: Menos resolución de entrada y frames ajustados.
     """
-    velocidad = "0.002" # Compensado para 15fps
+    # Bajamos la velocidad para que se vea suave a 20fps
+    velocidad = "0.001" 
     
     efectos = [
-        # 1. ZOOM IN CONSTANTE (15 fps)
-    # 1. ZOOM IN CONSTANTE
-        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z='min(zoom+{velocidad},1.5)':d=450:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
+        # 1. ZOOM IN (Escalamos solo a 1.5x en lugar de 2x para ahorrar CPU)
+        f"[0:v]scale={RESOLUTION_W*1.5}:-2,zoompan=z='min(zoom+{velocidad},1.3)':d=200:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps={FPS}[bg];",
         
-        # 2. PANEO A LA DERECHA
-        f"[0:v]scale=-2:{RESOLUTION_H*2},zoompan=z=1.2:d=450:x='x+3':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
+        # 2. PANEO DERECHA
+        f"[0:v]scale=-2:{RESOLUTION_H*1.5},zoompan=z=1.1:d=200:x='x+2':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps={FPS}[bg];",
         
-        # 3. PANEO A LA IZQUIERDA
-        f"[0:v]scale=-2:{RESOLUTION_H*2},zoompan=z=1.2:d=450:x='if(eq(on,1),iw-iw/zoom,x-3)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];",
+        # 3. PANEO IZQUIERDA
+        f"[0:v]scale=-2:{RESOLUTION_H*1.5},zoompan=z=1.1:d=200:x='if(eq(on,1),iw-iw/zoom,x-2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps={FPS}[bg];",
         
-        # 4. PANEO HACIA ABAJO
-        f"[0:v]scale={RESOLUTION_W*2}:-2,zoompan=z=1.2:d=450:x='iw/2-(iw/zoom/2)':y='y+3':s={RESOLUTION_W}x{RESOLUTION_H}:fps=15[bg];"
+        # 4. PANEO ABAJO
+        f"[0:v]scale={RESOLUTION_W*1.5}:-2,zoompan=z=1.1:d=200:x='iw/2-(iw/zoom/2)':y='y+2':s={RESOLUTION_W}x{RESOLUTION_H}:fps={FPS}[bg];"
     ]
     
     efecto_elegido = random.choice(efectos)
-    logger.info(f"    [FX Motor] Aplicando movimiento constante (15fps): {efectos.index(efecto_elegido) + 1}")
+    logger.info(f"    [FX Motor] Aplicando movimiento optimizado ({FPS}fps): {efectos.index(efecto_elegido) + 1}")
     return efecto_elegido
 
 
