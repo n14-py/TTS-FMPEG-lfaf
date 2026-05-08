@@ -166,8 +166,27 @@ def obtener_mapa_mapbox(ubicacion_texto, save_path):
         return None
 
 # ==============================================================================
-# 3. RECOLECTOR DE B-ROLL (PEXELS CON MEMORIA ANTI-DUPLICACIÓN)
+# 3. RECOLECTOR DE B-ROLL (PEXELS CON MEMORIA ANTI-DUPLICACIÓN Y BLINDAJE)
 # ==============================================================================
+
+def sanitizar_video(ruta_archivo):
+    """Verifica silenciosamente que el archivo bajado de Pexels sea un video real"""
+    cmd_check = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_type",
+        "-of", "default=nw=1:nk=1",
+        ruta_archivo
+    ]
+    try:
+        resultado = subprocess.run(cmd_check, capture_output=True, text=True, timeout=5)
+        # Si ffprobe responde "video", entonces es un MP4 válido
+        if "video" in resultado.stdout.lower():
+            return True
+        return False
+    except:
+        return False
+
 def obtener_video_stock(termino_busqueda, save_path):
     global _historial_pexels
     logger.info(f"  [Fetcher] Buscando video B-Roll sobre: '{termino_busqueda}'")
@@ -178,7 +197,6 @@ def obtener_video_stock(termino_busqueda, save_path):
 
     try:
         query = urllib.parse.quote(termino_busqueda)
-        # Pedimos hasta 15 resultados para tener de dónde elegir al azar
         url = f"https://api.pexels.com/videos/search?query={query}&orientation=landscape&per_page=15"
         headers = {'Authorization': PEXELS_API_KEY}
         
@@ -189,18 +207,13 @@ def obtener_video_stock(termino_busqueda, save_path):
             logger.warning(f"  [Fetcher] Cero resultados en Pexels para '{termino_busqueda}'.")
             return None
             
-        # Filtramos los videos que NO hemos usado recientemente
         videos_disponibles = [v for v in data['videos'] if v['id'] not in _historial_pexels]
         
-        # Si ya usamos todos, reseteamos la lista y agarramos uno al azar igual
         if not videos_disponibles:
-            logger.warning("  [Pexels] Ya se usaron todos los resultados, repitiendo...")
             videos_disponibles = data['videos']
 
-        # Elegimos al azar para garantizar variedad
         video_elegido = random.choice(videos_disponibles)
         
-        # Guardamos en la memoria y limpiamos si hay más de 50 (para no ahogar la RAM en AWS)
         _historial_pexels.append(video_elegido['id'])
         if len(_historial_pexels) > 50:
             _historial_pexels.pop(0)
@@ -208,7 +221,6 @@ def obtener_video_stock(termino_busqueda, save_path):
         video_link = None
         video_files = video_elegido.get('video_files', [])
         
-        # Ordenamos buscando HD sin llegar a 4K que destruya tu t3.micro
         video_files.sort(key=lambda x: x.get('width', 0), reverse=True)
         
         for file in video_files:
@@ -231,7 +243,13 @@ def obtener_video_stock(termino_busqueda, save_path):
                     if chunk: f.write(chunk)
             
             if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
-                return save_path
+                # BLINDAJE: Revisamos si es un video real antes de enviarlo
+                if sanitizar_video(save_path):
+                    return save_path
+                else:
+                    logger.warning("  [Fetcher] ¡Video falso/corrupto de Pexels detectado! Abortando escena de forma segura.")
+                    os.remove(save_path)
+                    return None
         
         logger.error(f"  [Fetcher] Error descargando MP4: HTTP {r.status_code}")
         return None
