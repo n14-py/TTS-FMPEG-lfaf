@@ -34,7 +34,7 @@ _historial_pexels = []
 # ==============================================================================
 
 # Pon aquí la URL directa a tu logo para el 1% de casos que fallen
-URL_LOGO_FALLBACK = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/No_image_available.svg/1024px-No_image_available.svg.png" 
+URL_LOGO_FALLBACK = "https://noticias.lat/favicon.png" 
 
 def sanitizar_imagen(ruta_archivo):
     """Verifica silenciosamente si es una imagen real sin ensuciar la consola"""
