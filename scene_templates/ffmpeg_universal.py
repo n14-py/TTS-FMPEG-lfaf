@@ -221,39 +221,34 @@ def ensamblar_escena(fondo_path, overlay_path, audio_tts_path, bgm_path, sfx_pat
     try:
         logger.info(f"    [FFmpeg] Ejecutando renderizado de la escena...")
         proceso = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        proceso.communicate(timeout=200) 
+        
+        # ¡AQUÍ ESTÁ LA MAGIA! Le damos 600 segundos (10 minutos) para respirar
+        proceso.communicate(timeout=600) 
         
         if proceso.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             logger.info(f"  [FFmpeg Universal] ¡ÉXITO! Escena lista: {os.path.basename(output_path)}")
             return True
         else:
+            logger.error("  [FFmpeg Universal] Falla: El archivo de salida está corrupto o vacío.")
             return False
             
     except subprocess.TimeoutExpired:
-        logger.error("  [FFmpeg Universal] TIMEOUT: Matando proceso Zombi...")
+        logger.error("  [FFmpeg Universal] TIMEOUT: La escena superó los 10 minutos. Matando proceso Zombi...")
         proceso.kill() 
         proceso.communicate() 
         return False
+        
     except Exception as e:
         logger.error(f"  [FFmpeg Universal] Error inesperado en el sistema: {e}")
         if 'proceso' in locals():
             proceso.kill()
             proceso.communicate()
-        return False
-            
-    except subprocess.TimeoutExpired:
-        logger.error("  [FFmpeg Universal] TIMEOUT: La escena tardó demasiado. Abortando hilo.")
-        return False
-    except subprocess.CalledProcessError as e:
-        logger.error(f"  [FFmpeg Universal] FFmpeg se estrelló procesando los filtros complejos. Código de error: {e.returncode}")
-        return False
-    except Exception as e:
-        logger.error(f"  [FFmpeg Universal] Error inesperado en el sistema: {e}")
         return False 
+            
     finally:
         # Borramos el txt temporal para mantener el servidor limpio
         if 'texto_path' in locals() and os.path.exists(texto_path):
             try:
                 os.remove(texto_path)
             except:
-                pass
+                pass    

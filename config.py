@@ -38,7 +38,7 @@ SFX_DIR = os.path.join(ASSETS_DIR, "sfx")
 # ==============================================================================
 RESOLUTION_W = 1280
 RESOLUTION_H = 720
-FPS = 20
+FPS = 15
 VIDEO_PRESET = "ultrafast"
 CHROMA_COLOR = "0x00FF00"
 CHROMA_SIMILARITY = "0.30"
