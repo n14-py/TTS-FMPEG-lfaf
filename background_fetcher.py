@@ -28,9 +28,30 @@ PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "TU_CLAVE_PIXABAY_AQUI")
 # Historial global para no repetir videos de Pexels
 _historial_pexels = []
 
+
 # ==============================================================================
 # 1. RECOLECTOR DE LA FOTO REAL DE LA NOTICIA
 # ==============================================================================
+def sanitizar_imagen(ruta_archivo):
+    """Verifica que la imagen sea real y la limpia para que FFmpeg no se trabe"""
+    clean_path = ruta_archivo + "_clean.jpg"
+    cmd_sanitize = [
+        "ffmpeg", "-y", "-v", "error",
+        "-i", ruta_archivo,
+        "-vf", "scale='min(1920,iw)':-2", # Achica imágenes gigantes
+        "-frames:v", "1",
+        clean_path
+    ]
+    try:
+        # Si esto falla, significa que NO era una imagen (era un HTML o archivo corrupto)
+        subprocess.run(cmd_sanitize, timeout=10, check=True)
+        os.replace(clean_path, ruta_archivo) # Guarda la imagen limpia
+        return True
+    except:
+        if os.path.exists(ruta_archivo): os.remove(ruta_archivo)
+        if os.path.exists(clean_path): os.remove(clean_path)
+        return False
+
 def obtener_imagen_noticia(url, save_path, retries=3):
     if not url or url == "":
         return None
@@ -43,7 +64,11 @@ def obtener_imagen_noticia(url, save_path, retries=3):
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
             if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
-                return save_path
+                if sanitizar_imagen(save_path):
+                    return save_path
+                else:
+                    logger.warning("  [Fetcher] ¡Imagen falsa/corrupta detectada y eliminada!")
+                    return None
                 
         except Exception:
             logger.warning(f"  [Fetcher] CURL falló en intento {attempt+1}. Usando Requests...")
@@ -54,7 +79,11 @@ def obtener_imagen_noticia(url, save_path, retries=3):
                     with open(save_path, 'wb') as f:
                         f.write(r.content)
                     if os.path.getsize(save_path) > 1024:
-                        return save_path
+                        if sanitizar_imagen(save_path):
+                            return save_path
+                        else:
+                            logger.warning("  [Fetcher] ¡Imagen falsa/corrupta detectada y eliminada!")
+                            return None
             except Exception as e:
                 logger.error(f"  [Fetcher] Error en Requests: {e}")
                 
@@ -62,6 +91,7 @@ def obtener_imagen_noticia(url, save_path, retries=3):
 
     logger.error("  [Fetcher] Error definitivo: No se pudo descargar la imagen.")
     return None
+
 
 # ==============================================================================
 # 2. RECOLECTOR DE MAPAS (MAPBOX)
