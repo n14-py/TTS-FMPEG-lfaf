@@ -109,6 +109,19 @@ def handle_generate_video():
                     if youtube_id:
                         youtube_uploader.mark_as_processed(article_id, youtube_id)
                         _notificar_webhook_node("video_complete", article_id, youtube_id)
+                        
+                        # --- AUTODESTRUCCIÓN PARA LIBERAR ESPACIO ---
+                        try:
+                            os.remove(video_path)
+                            logger.info(f"  [Limpieza] Video borrado del disco: {video_path}")
+                            # Borrar también la miniatura si existe
+                            posible_jpg = video_path.rsplit('.', 1)[0] + '.jpg'
+                            if os.path.exists(posible_jpg):
+                                os.remove(posible_jpg)
+                        except Exception as e:
+                            logger.warning(f"  [Limpieza] No se pudo borrar el video: {e}")
+                        # --------------------------------------------
+                        
                     else:
                         logger.error("  [Background] Falló la subida a YouTube.")
                         _notificar_webhook_node("video_failed", article_id, error="YouTube Upload Failed")
