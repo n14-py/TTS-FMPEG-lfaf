@@ -18,6 +18,8 @@ from flask import Flask, request, jsonify
 # Importamos nuestros módulos maestros
 import main_orchestrator
 import youtube_uploader
+import cloudflare_r2
+import subprocess
 
 # ==============================================================================
 # CONFIGURACIÓN INICIAL
@@ -97,8 +99,15 @@ def handle_generate_video():
                 video_path = main_orchestrator.process_video_payload(payload)
                 
                 # Paso B: Subir a YouTube si se fabricó bien
+# Paso B: Subir a Cloudflare y YouTube
                 if video_path and os.path.exists(video_path):
-                    logger.info("  [Background] Video listo. Iniciando subida a YouTube...")
+                    logger.info("  [Background] Video listo. Iniciando subidas...")
+                    
+                    # 1. Subir a Cloudflare R2
+                    nombre_video_r2 = f"video_{article_id}.mp4"
+                    url_r2 = cloudflare_r2.upload_media_to_r2(video_path, nombre_video_r2)
+                    
+                    # 2. Subir a YouTube
                     youtube_id = youtube_uploader.upload_video(
                         file_path=video_path,
                         title=youtube_title,
@@ -106,9 +115,13 @@ def handle_generate_video():
                         tags=youtube_tags
                     )
                     
-                    if youtube_id:
-                        youtube_uploader.mark_as_processed(article_id, youtube_id)
-                        _notificar_webhook_node("video_complete", article_id, youtube_id)
+                    # 3. Notificar a Node.js (Solo si se subió a R2 o a YouTube)
+                    if youtube_id or url_r2:
+                        if youtube_id:
+                            youtube_uploader.mark_as_processed(article_id, youtube_id)
+                            
+                        # Pasamos youtube_id Y url_r2 al webhook
+                        _notificar_webhook_node("video_complete", article_id, youtube_id=youtube_id, video_url=url_r2)
                         
                         # --- AUTODESTRUCCIÓN PARA LIBERAR ESPACIO ---
                         try:
@@ -161,7 +174,7 @@ def handle_generate_video():
 # ==============================================================================
 # SISTEMA DE NOTIFICACIONES (WEBHOOKS)
 # ==============================================================================
-def _notificar_webhook_node(endpoint, article_id, youtube_id=None, error=None):
+def _notificar_webhook_node(endpoint, article_id, youtube_id=None, video_url=None, audio_url=None, error=None):
     """
     Se comunica de vuelta con tu API de Node.js para avisarle cómo terminó todo.
     """
@@ -171,6 +184,10 @@ def _notificar_webhook_node(endpoint, article_id, youtube_id=None, error=None):
     payload = {"articleId": article_id}
     if youtube_id:
         payload["youtubeId"] = youtube_id
+    if video_url:
+        payload["videoUrl"] = video_url # <--- Link de Cloudflare para Video
+    if audio_url:
+        payload["audioUrl"] = audio_url # <--- Link de Cloudflare para Audio MP3
     if error:
         payload["error"] = error
 
@@ -183,9 +200,72 @@ def _notificar_webhook_node(endpoint, article_id, youtube_id=None, error=None):
     except Exception as e:
         logger.error(f"  [Webhook] Error de conexión al notificar a Node.js: {e}")
 
+
 @app.route('/', methods=['GET'])
 def index():
     return "<h1>Noticias.lat - Motor Matricial Activo</h1>", 200
+
+
+
+# =====================================================================
+# 🎧 MICROSERVICIO DE AUDIO (Para el botón "Escuchar" de la App)
+# =====================================================================
+# =====================================================================
+# 🎧 MICROSERVICIO DE AUDIO (Para el botón "Escuchar" de la App)
+# =====================================================================
+def background_audio_task(article_id, texto_completo):
+    logger.info(f"  [Audio] 🎙️ Iniciando locución completa para {article_id}")
+    try:
+        nombre_archivo = f"audio_{article_id}.mp3"
+        # Aseguramos que la carpeta temp exista antes de guardar el audio
+        os.makedirs("temp", exist_ok=True)
+        ruta_audio = f"temp/{nombre_archivo}" 
+        
+        # 1. Limpiamos comillas que puedan romper la consola
+        texto_limpio = texto_completo.replace('"', '').replace("'", "")
+        
+        # 2. Generamos el audio de corrido con la mejor voz
+        comando = f'edge-tts --voice "es-MX-JorgeNeural" --rate="+10%" --text "{texto_limpio}" --write-media {ruta_audio}'
+        subprocess.run(comando, shell=True, check=True)
+        
+        # 3. Subimos el MP3 a Cloudflare R2
+        url_r2 = cloudflare_r2.upload_media_to_r2(ruta_audio, nombre_archivo)
+        
+        # 4. Avisamos a Node.js que el AUDIO está listo
+        if url_r2:
+            _notificar_webhook_node("audio_complete", article_id, video_url=None, audio_url=url_r2)
+            
+        # 5. --- LIMPIEZA VITAL PARA NO LLENAR EL DISCO ---
+        try:
+            if os.path.exists(ruta_audio):
+                os.remove(ruta_audio)
+                logger.info(f"  [Limpieza] Audio borrado del disco: {ruta_audio}")
+        except Exception as e:
+            logger.warning(f"  [Limpieza] No se pudo borrar el audio local: {e}")
+            
+    except Exception as e:
+        logger.error(f"  [Audio] ❌ Error generando MP3: {e}")
+
+@app.route('/api/tasks/audio', methods=['POST'])
+def task_audio():
+    """Ruta que Node.js llamará para pedir un MP3 completo."""
+    data = request.json
+    api_key = request.headers.get("x-api-key")
+    
+    if api_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+        
+    article_id = data.get("articleId")
+    texto_completo = data.get("texto")
+    
+    if not article_id or not texto_completo:
+        return jsonify({"error": "Faltan datos"}), 400
+
+    # Lanzamos el proceso en segundo plano para no hacer esperar a Node.js
+    thread = threading.Thread(target=background_audio_task, args=(article_id, texto_completo))
+    thread.start()
+    
+    return jsonify({"message": "Generación de audio iniciada", "articleId": article_id}), 202
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=PORT)
