@@ -267,5 +267,21 @@ def task_audio():
     
     return jsonify({"message": "Generación de audio iniciada", "articleId": article_id}), 202
 
+def run_cleanup_loop():
+    import time
+    # Espera 10 segundos después de arrancar el servidor antes de hacer la primera limpieza
+    time.sleep(10)
+    while True:
+        try:
+            cloudflare_r2.delete_old_files_from_r2(days_old=28)
+        except Exception as e:
+            logger.error(f"❌ Error en el bucle de limpieza automática de R2: {e}")
+        # Esperar 86400 segundos (24 horas) para la siguiente revisión
+        time.sleep(86400)
+
 if __name__ == '__main__':
+    # Lanzar el hilo de limpieza en segundo plano al arrancar
+    cleanup_thread = threading.Thread(target=run_cleanup_loop, daemon=True)
+    cleanup_thread.start()
+    
     app.run(host='0.0.0.0', port=PORT)

@@ -3,6 +3,8 @@ from botocore.config import Config
 import logging
 import os
 from dotenv import load_dotenv
+import datetime
+
 
 # Cargar las variables del archivo .env automáticamente
 load_dotenv()
@@ -125,3 +127,60 @@ if __name__ == '__main__':
     # Limpieza del archivo de prueba local
     if os.path.exists(test_file):
         os.remove(test_file)
+
+
+
+
+
+        # =====================================================================
+# 🧹 SISTEMA DE LIMPIEZA AUTOMÁTICA (28 DÍAS)
+# =====================================================================
+
+def delete_old_files_from_r2(days_old=28):
+    """
+    Busca y elimina audios y videos en Cloudflare R2 que tengan más de 'days_old' días
+    para evitar acumular costos de almacenamiento.
+    """
+    if not all([ACCOUNT_ID, ACCESS_KEY, SECRET_KEY, BUCKET_NAME]):
+        logger.error("  [Cloudflare Limpieza] ❌ Error: Faltan credenciales de R2.")
+        return False
+
+    try:
+        s3 = boto3.client(
+            's3',
+            endpoint_url=f'https://{ACCOUNT_ID}.r2.cloudflarestorage.com',
+            aws_access_key_id=ACCESS_KEY,
+            aws_secret_access_key=SECRET_KEY,
+            config=Config(signature_version='s3v4')
+        )
+        
+        logger.info(f"  [Cloudflare Limpieza] 🕒 Buscando archivos con más de {days_old} días de antigüedad...")
+        
+        # Calcular la fecha exacta de hace 28 días
+        fecha_limite = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_old)
+        
+        # Obtener la lista de archivos en el bucket
+        response = s3.list_objects_v2(Bucket=BUCKET_NAME)
+        
+        if 'Contents' not in response:
+            logger.info("  [Cloudflare Limpieza] 📭 El bucket está vacío, no hay nada que borrar.")
+            return True
+
+        archivos_borrados = 0
+        for obj in response['Contents']:
+            # Comparar la fecha de modificación del archivo con nuestra fecha límite
+            if obj['LastModified'] < fecha_limite:
+                logger.info(f"  [Cloudflare Limpieza] 🗑️ Borrando archivo antiguo: {obj['Key']}")
+                s3.delete_object(Bucket=BUCKET_NAME, Key=obj['Key'])
+                archivos_borrados += 1
+                
+        if archivos_borrados > 0:
+            logger.info(f"  [Cloudflare Limpieza] ✅ Limpieza terminada. Se borraron {archivos_borrados} archivos.")
+        else:
+            logger.info("  [Cloudflare Limpieza] ✨ No se encontraron archivos tan viejos para borrar hoy.")
+            
+        return True
+
+    except Exception as e:
+        logger.error(f"  [Cloudflare Limpieza] ❌ Error durante la limpieza: {str(e)}")
+        return False
