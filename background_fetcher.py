@@ -60,26 +60,22 @@ def obtener_imagen_noticia(url, save_path, retries=3):
     if not url or url == "":
         url = URL_LOGO_FALLBACK
         
-    logger.info(f"  [Fetcher] Descargando imagen (Modo Browser): {url[:50]}...")
+    logger.info(f"  [Fetcher] Descargando imagen: {url[:50]}...")
     
-    # CABECERAS EXTREMAS: Engañamos a Cloudflare y Firewalls haciéndonos pasar por Chrome
-    headers_humanos = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Accept-Language': 'es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Referer': 'https://www.google.com/',
-        'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"Windows"',
-        'Sec-Fetch-Dest': 'image',
-        'Sec-Fetch-Mode': 'no-cors',
-        'Sec-Fetch-Site': 'cross-site'
+    # 🎭 EL DISFRAZ PERFECTO QUE FUNCIONÓ EN TUS PRUEBAS
+    cabeceras_falsas = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Referer": "https://www.google.com/"
     }
 
     for attempt in range(retries):
-        # INTENTO 1: Requests con camuflaje total
+        # ==========================================
+        # INTENTO 1: Descarga Directa Disfrazada
+        # ==========================================
         try:
-            r = requests.get(url, headers=headers_humanos, verify=False, timeout=15)
+            r = requests.get(url, headers=cabeceras_falsas, timeout=10)
             if r.status_code == 200:
                 with open(save_path, 'wb') as f:
                     f.write(r.content)
@@ -88,18 +84,18 @@ def obtener_imagen_noticia(url, save_path, retries=3):
         except Exception:
             pass
 
-        # INTENTO 2: Curl con camuflaje total
+        # ==========================================
+        # INTENTO 2: El Puente de Google (Alternativa)
+        # ==========================================
         try:
-            cmd = [
-                "curl", "-L", "-k", "--retry", "2", "-s",
-                "-A", headers_humanos['User-Agent'],
-                "-H", f"Accept: {headers_humanos['Accept']}",
-                "-H", f"Referer: {headers_humanos['Referer']}",
-                "-o", save_path, url
-            ]
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
-                return save_path
+            url_magica = f"https://images10-focus-opensocial.googleusercontent.com/gadgets/proxy?container=focus&refresh=2592000&url={url}"
+            r_proxy = requests.get(url_magica, timeout=10)
+            if r_proxy.status_code == 200:
+                with open(save_path, 'wb') as f:
+                    f.write(r_proxy.content)
+                if os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
+                    logger.info("  [Fetcher] Imagen obtenida exitosamente usando el Puente de Google.")
+                    return save_path
         except Exception:
             pass
             
@@ -120,7 +116,6 @@ def obtener_imagen_noticia(url, save_path, retries=3):
         logger.error(f"  [Fetcher] Falló hasta el logo de respaldo: {e}")
         
     return None
-
 
 # ==============================================================================
 # 2. RECOLECTOR DE MAPAS (MAPBOX)
