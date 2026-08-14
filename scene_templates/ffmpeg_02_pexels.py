@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 ==============================================================================
-PLANTILLA: ESCENAS CON VIDEOS DE STOCK (PEXELS)
+PLANTILLA: ESCENAS CON VIDEOS DE STOCK (PEXELS) Y SOPORTE DE ADS
 ==============================================================================
 """
-
 import os
 import logging
 import subprocess
@@ -15,17 +14,17 @@ from config import *
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
-# FUNCIONES DE TEXTO PARA PEXELS (Blindado Anti-N)
+# FUNCIONES DE TEXTO PARA PEXELS (Blindado Anti-\n)
 # ==============================================================================
 def formatear_texto(texto, max_chars):
     """Corta el texto dinámicamente para que encaje en los zócalos de Canva."""
     if not texto:
         return ""
         
-    # 1. EXTERMINIO DE LA "n" Y LIMPIEZA EXTREMA
+    # 1. EXTERMINIO DE LA "\n" Y LIMPIEZA EXTREMA
     texto = texto.replace("\\n", " ").replace("\n", " ") # Adiós saltos ocultos
     texto = " ".join(texto.split()) # Quita espacios dobles
-    texto = texto.replace("'", "\u2019").replace(":", "\:") # Protege comillas
+    texto = texto.replace("'", "\u2019").replace(":", "\\:") # Protege comillas
     
     # 2. CORTAR TEXTO
     wrapper = textwrap.TextWrapper(width=max_chars)
@@ -38,7 +37,7 @@ def formatear_texto(texto, max_chars):
 # ==============================================================================
 # EL ENSAMBLADOR DE PEXELS
 # ==============================================================================
-def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sfx_path, texto, output_path, unique_id):
+def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sfx_path, texto, output_path, unique_id, local_ad_banner=None):
     import background_fetcher
     
     logger.info(f"  [Pexels] Buscando video para: '{termino}'...")
@@ -51,7 +50,7 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
     if not fondo_path:
         fondo_path = os.path.join(ASSETS_DIR, "images", "default_news_bg.jpg")
         logger.warning(f"  [Pexels] Falló la descarga. Usando fondo por defecto.")
-    
+
     # Validaciones de seguridad
     if not os.path.exists(fondo_path) or not os.path.exists(overlay_path) or not os.path.exists(audio_tts_path):
         logger.error("  [Pexels] Faltan archivos clave para ensamblar la escena.")
@@ -66,7 +65,7 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
     color, size = config["color"], config["font_size"]
     
     # --- AQUÍ ESTÁ EL CONTORNO (BORDER) NEGRO PARA PEXELS ---
-    shadow = "bordercolor=black:borderw=2" 
+    shadow = "bordercolor=black:borderw=2"
 
     # Escribimos el texto en un archivo temporal a prueba de balas
     texto_path = os.path.join(TEMP_VIDEO_DIR, f"txt_{uuid.uuid4().hex[:6]}.txt").replace('\\', '/')
@@ -91,8 +90,25 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
         cmd.extend(["-loop", "1", "-framerate", "12", "-i", fondo_path])
         # Zoom sutil optimizado: d=450 (quita el límite infinito) y fijado a 12 FPS
         fondo_filtro_complex = f"[0:v]scale={RESOLUTION_W*2}:-1,zoompan=z='min(zoom+0.0005,1.5)':d=450:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={RESOLUTION_W}x{RESOLUTION_H}:fps=12[bg];"
+
     # Entradas de FFmpeg
     cmd.extend(["-stream_loop", "-1", "-i", overlay_path])
+
+    # --- ENTRADA EXTRA: BANNER PUBLICITARIO ---
+    banner_idx = -1
+    audio_idx = 2
+    if local_ad_banner and os.path.exists(local_ad_banner):
+        # Magia 1: Si es foto, le forzamos un loop infinito para que NO mate la escena al segundo 1
+        if local_ad_banner.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            cmd.extend(["-loop", "1", "-framerate", str(FPS), "-i", local_ad_banner])
+        else:
+            cmd.extend(["-stream_loop", "-1", "-i", local_ad_banner])
+            
+        banner_idx = 2
+        audio_idx = 3 # Desplazamos el audio una posición       
+        logger.info("  [Pexels] 💰 Inyectando Banner Flotante de Anuncio.")
+
+    # --- ENTRADA AUDIO TTS ---
     cmd.extend(["-i", audio_tts_path])
 
     filter_complex = fondo_filtro_complex + (
@@ -104,29 +120,44 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
         f"[bg][v_keyed]overlay=(W-w)/2:(H-h)/2:shortest=1[comp];"
     )
 
-    # 5. INYECCIÓN DEL ZÓCALO DE TEXTO (Usando el archivo temporal)
-# 5. INYECCIÓN DEL ZÓCALO DE TEXTO (Blindaje Windows)
+    nodo_actual = "comp"
+
+    # --- INYECCIÓN DEL BANNER FLOTANTE ---
+# --- INYECCIÓN DEL BANNER FLOTANTE ---
+# --- INYECCIÓN DEL BANNER FLOTANTE ---
+    if banner_idx != -1:
+        # Magia 2: scale=400:-2 asegura alturas pares siempre, y QUITAMOS el shortest=1
+        filter_complex += (
+            f"[{banner_idx}:v]scale=400:-2,setsar=1[banner_scaled];"
+            f"[{nodo_actual}][banner_scaled]overlay=x='if(lte(t,1),W-(w+40)*t,W-w-40)':y=40[comp_ad];"
+        )
+        nodo_actual = "comp_ad"
+
+    # 5. INYECCIÓN DEL ZÓCALO DE TEXTO (Blindaje Windows)
     if clean_text:
         # Escapamos los dos puntos y barras para que FFmpeg en Windows no explote
         font_safe = str(FONT_PATH).replace('\\', '/').replace(':', '\\:')
         txt_safe = str(texto_path).replace('\\', '/').replace(':', '\\:')
         
-        filter_complex += f"[comp]drawtext=fontfile='{font_safe}':textfile='{txt_safe}':fontcolor={color}:fontsize={size}:{shadow}:x={x}:y={y}[vout];"
+        filter_complex += f"[{nodo_actual}]drawtext=fontfile='{font_safe}':textfile='{txt_safe}':fontcolor={color}:fontsize={size}:{shadow}:x={x}:y={y}[vout];"
     else:
-        filter_complex += f"[comp]copy[vout];"
+        filter_complex += f"[{nodo_actual}]copy[vout];"
 
     # Mezclador de Audio
-    audio_inputs = "[2:a]"
+    audio_inputs = f"[{audio_idx}:a]"
     input_count = 1
+    current_in_idx = audio_idx + 1
 
     if bgm_path and os.path.exists(bgm_path):
         cmd.extend(["-i", bgm_path])
-        audio_inputs += "[3:a]"
+        audio_inputs += f"[{current_in_idx}:a]"
+        current_in_idx += 1
         input_count += 1
         
     if sfx_path and os.path.exists(sfx_path):
         cmd.extend(["-i", sfx_path])
-        audio_inputs += "[4:a]"
+        audio_inputs += f"[{current_in_idx}:a]"
+        current_in_idx += 1
         input_count += 1
 
     if input_count > 1:
@@ -134,7 +165,7 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
         audio_map = "-map [aout]"
     else:
         filter_complex = filter_complex.rstrip(';')
-        audio_map = "-map 2:a"
+        audio_map = f"-map {audio_idx}:a"
 
     cmd.extend([
         "-filter_complex", filter_complex,
@@ -155,10 +186,11 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
         if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             return True
         return False
-            
+        
     except Exception as e:
         logger.error(f"  [FFmpeg Pexels] Error: {e}")
-        return False 
+        return False
+
     finally:
         # 1. Borrar el archivo de texto temporal para mantener limpio el disco
         if 'texto_path' in locals() and os.path.exists(texto_path):

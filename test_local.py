@@ -21,160 +21,50 @@ def ejecutar_prueba_ecuador():
     img_noticia = "https://img.eldiario.ec/upload/2026/05/17161D524C43416D15120F54584945711F121818534B42711416-1024x576.jpg"
 
     payload = {
-    "youtube_title": "Rocha Moya: Extradición, Protección y Análisis Legal en México",
-    "youtube_description": "Últimas noticias sobre Rubén Rocha Moya, la solicitud de extradición de Estados Unidos, la protección de la Guardia Nacional y las implicaciones legales de este caso. Análisis completo y actualizado.",
+    "youtube_title": "Rocha Moya: Guardia Nacional y Acusaciones de EE.UU.",
+    "youtube_description": "🔔 ¡Suscríbete al canal para no perderte ninguna noticia!\n👉 Lee la noticia completa aquí: https://www.noticias.lat/articulo/id_articulo_prueba\n\nTras solicitar licencia como gobernador de Sinaloa para no obstaculizar las investigaciones de la Fiscalía General de la República (FGR), Rubén Rocha Moya cuenta con elementos de la Guardia Nacional que resguardan su seguridad, según informó la presidenta Claudia Sheinbaum. La decisión se tomó tras una evaluación de riesgo realizada por el Gabinete de Seguridad, un protocolo que se aplica a cualquier ciudadano que solicite apoyo en su seguridad, ya sea un gobernador, legislador o un ciudadano común.\n        Sheinbaum enfatizó que la protección se ofrece a cualquier persona que sea considerada en riesgo, tras un análisis exhaustivo de la situación. En estos casos como en cualquier otro, sea para un gobernador o gobernador con licencia de cualquier estado, un diputado, senador, ciudadano que tenga consideración de riesgo de su persona solicita a la Guardia Nacional apoyo en su seguridad y se hace un análisis de riesgo.\n        La solicitud de licencia de Rocha Moya se produjo después de que el gobierno de Estados Unidos lo acusara de presuntos nexos con Los Chapitos y el crimen organizado en Sinaloa. Ante este escenario, el Congreso estatal nombró a Yeraldine Bonilla como gobernadora interina.",
     "youtube_tags": [
-        "Rubén Rocha Moya",
-        "Extradición",
+        "Rocha Moya",
+        "Sinaloa",
         "Guardia Nacional",
-        "México",
-        "Estados Unidos",
-        "Crimen Organizado",
-        "Luisa María Alcalde",
-        "Sheinbaum"
+        "FGR",
+        "Noticias México"
     ],
     "scenes": [
         {
             "type": "intro",
-            "text": "Rocha Moya enfrenta acusaciones y medidas de seguridad, mientras se analiza su posible extradición a Estados Unidos.",
+            "text": "Rubén Rocha Moya recibe protección de la Guardia Nacional tras solicitar licencia en Sinaloa.",
+            "layout_category": "sin_presentador",
             "voice": "hombre_1",
             "bgm_mood": "urgencia",
             "sfx_type": "impactos"
         },
+
+
         {
             "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
+            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true",
             "layout_category": "hombre",
-            "text": "Rubén Rocha Moya solicitó licencia como gobernador de Sinaloa para no entorpecer las investigaciones de la FGR, lo que ha generado un debate sobre su situación legal y la necesidad de garantizar un proceso transparente y justo. La colaboración entre México y Estados Unidos es crucial.",
+            "text": "El protocolo de seguridad se aplica a cualquier ciudadano que solicite apoyo, independientemente de si es gobernador, legislador o ciudadano común.",
             "voice": "hombre_1",
             "bgm_mood": "analisis",
             "sfx_type": "transiciones"
         },
         {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "mujer",
-            "text": "La presidenta Sheinbaum informó que Rocha Moya cuenta con elementos de la Guardia Nacional para su seguridad, tras una evaluación de riesgo estándar. Este protocolo se aplica a cualquier ciudadano que requiera protección, sin importar su cargo o posición social.",
-            "voice": "mujer_1",
-            "bgm_mood": "analisis",
-            "sfx_type": "transiciones"
-        },
-        {
-            "type": "pexels",
-            "termino_busqueda": "security forces mexico",
+            "type": "ad_video",
             "layout_category": "sin_presentador",
-            "text": "La Guardia Nacional evalúa constantemente los niveles de riesgo para ofrecer protección adecuada, considerando factores como amenazas directas, vulnerabilidad y la naturaleza de las investigaciones en curso. La seguridad es una prioridad para el gobierno.",
-            "voice": "hombre_1",
-            "bgm_mood": "tension",
-            "sfx_type": "alertas"
+            "ad_media_url": "https://pub-32bf4851ff77488ebe727d3dad5fbb4d.r2.dev/anuncios/ad_1786665259795_671169041.mp4"
         },
+
+      
         {
             "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
+            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true",
             "layout_category": "hombre",
-            "text": "La solicitud de licencia de Rocha Moya se produjo tras acusaciones de Estados Unidos sobre presuntos nexos con Los Chapitos y el crimen organizado en Sinaloa. Estas acusaciones han generado una fuerte controversia y un escrutinio público intenso.",
-            "voice": "hombre_1",
-            "bgm_mood": "urgencia",
-            "sfx_type": "impactos"
-        },
-        {
-            "type": "mapa",
-            "ubicacion": "Sinaloa, Mexico",
-            "layout_category": "sin_presentador",
-            "text": "Sinaloa, un estado clave en la lucha contra el narcotráfico, se encuentra en el centro de esta controversia. La situación requiere una estrategia integral que involucre a las autoridades federales y estatales para garantizar la seguridad y el estado de derecho.",
-            "voice": "mujer_1",
-            "bgm_mood": "tension",
-            "sfx_type": "alertas"
-        },
-        {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "mujer",
-            "text": "Yeraldine Bonilla fue nombrada gobernadora interina de Sinaloa tras la licencia de Rocha Moya. Su administración enfrenta el desafío de mantener la estabilidad política y social en un momento de incertidumbre y tensión.",
-            "voice": "mujer_1",
-            "bgm_mood": "analisis",
-            "sfx_type": "transiciones"
-        },
-        {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "hombre",
-            "text": "Sheinbaum defendió su gira por Palenque y desmintió especulaciones sobre una reunión con López Obrador, calificando las acusaciones de misoginia y falta de reconocimiento a su capacidad de toma de decisiones. La transparencia es fundamental.",
+            "text": "Se espera que en los próximos días se revelen más detalles sobre el proceso de extradición y las investigaciones de FGR.",
             "voice": "hombre_1",
             "bgm_mood": "analisis",
             "sfx_type": "transiciones"
-        },
-        {
-            "type": "pexels",
-            "termino_busqueda": "political debate mexico",
-            "layout_category": "sin_presentador",
-            "text": "La presidenta Sheinbaum enfatizó la importancia de evitar la desinformación y los ataques basados en prejuicios de género. La discusión política debe centrarse en los hechos y las propuestas, no en ataques personales.",
-            "voice": "mujer_1",
-            "bgm_mood": "tension",
-            "sfx_type": "alertas"
-        },
-        {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "hombre",
-            "text": "Luisa María Alcalde, consejera Jurídica de la Presidencia, analizará la posibilidad de retrasar la elección Judicial al año 2028. El análisis busca determinar si una reforma que la posponga sería conveniente para el sistema judicial.",
-            "voice": "hombre_1",
-            "bgm_mood": "analisis",
-            "sfx_type": "transiciones"
-        },
-        {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "mujer",
-            "text": "Alcalde aclaró la diferencia entre una solicitud de extradición y una solicitud de detención provisional con fines de extradición en el caso de Rocha Moya. La solicitud actual es de detención provisional, un paso previo a la extradición formal.",
-            "voice": "mujer_1",
-            "bgm_mood": "urgencia",
-            "sfx_type": "impactos"
-        },
-        {
-            "type": "pexels",
-            "termino_busqueda": "legal process mexico",
-            "layout_category": "sin_presentador",
-            "text": "El Tratado de Extradición entre México y Estados Unidos establece los requisitos y procedimientos para la entrega de personas acusadas de delitos. La solicitud formal debe presentarse por vía diplomática con pruebas detalladas.",
-            "voice": "hombre_1",
-            "bgm_mood": "analisis",
-            "sfx_type": "transiciones"
-        },
-        {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "hombre",
-            "text": "La solicitud de detención provisional permite a las autoridades mexicanas detener a Rocha Moya mientras Estados Unidos prepara la solicitud formal de extradición. Este proceso busca evitar la fuga y garantizar la comparecencia ante la justicia.",
-            "voice": "hombre_1",
-            "bgm_mood": "tension",
-            "sfx_type": "alertas"
-        },
-        {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "mujer",
-            "text": "Profeco informó que el litro de diésel se venderá a un precio máximo de 27 pesos esta semana, mientras que la gasolina Magna tiene un promedio de 23.67 pesos por litro. Se publicaron listas de gasolineras con precios más bajos.",
-            "voice": "mujer_1",
-            "bgm_mood": "analisis",
-            "sfx_type": "transiciones"
-        },
-        {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "hombre",
-            "text": "Leticia Ramírez, nueva secretaria del Bienestar, dio a conocer el calendario de pagos de la Pensión Bienestar para Adultos Mayores y otros programas sociales, comenzando el 4 de mayo con la letra A en orden alfabético.",
-            "voice": "hombre_1",
-            "bgm_mood": "analisis",
-            "sfx_type": "transiciones"
-        },
-        {
-            "type": "body",
-            "image_url": "https://www.elfinanciero.com.mx/resizer/v2/BVLRGKWUCZAK5KQQI574NNPCWM.jpg?smart=true&auth=da160f5b33d3101bcf32028457ec9e5cc06b41c1ede1220bea5b502cb4ea547b&width=1200&height=630",
-            "layout_category": "mujer",
-            "text": "La situación de Rubén Rocha Moya sigue siendo un tema central en la agenda política nacional, con implicaciones significativas para la seguridad y la cooperación entre México y Estados Unidos. El análisis legal es crucial.",
-            "voice": "mujer_1",
-            "bgm_mood": "urgencia",
-            "sfx_type": "impactos"
         }
     ]
 }
