@@ -151,6 +151,11 @@ def upload_video(file_path, title, description, tags, category_id="25", thumbnai
             'status': {
                 'privacyStatus': 'public',
                 'selfDeclaredMadeForKids': False
+            },
+            'monetizationDetails': {
+                'access': {
+                'adsEnabled': True
+                }
             }
         }
         
