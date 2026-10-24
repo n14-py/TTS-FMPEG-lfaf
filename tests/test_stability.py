@@ -19,6 +19,7 @@ import main_orchestrator
 import process_guard
 import service_guard
 import tts_engine
+import youtube_uploader
 
 def _fail_tts(message):
     def _run(coro):
@@ -372,6 +373,33 @@ class GunicornInvalidRequestTests(unittest.TestCase):
                 except ProcessLookupError:
                     pass
                 proc.wait(timeout=5)
+
+
+class YouTubeUploadClientTests(unittest.TestCase):
+    def test_service_uses_library_client(self):
+        class _Creds:
+            valid = True
+
+        with patch("youtube_uploader.os.path.exists", return_value=True), \
+             patch("youtube_uploader.Credentials.from_authorized_user_file", return_value=_Creds()), \
+             patch("youtube_uploader.build") as build:
+            build.return_value = object()
+            service = youtube_uploader.get_authenticated_service(0)
+
+        self.assertIs(service, build.return_value)
+        args, kwargs = build.call_args
+        self.assertEqual(args, ("youtube", "v3"))
+        self.assertIsInstance(kwargs.get("credentials"), _Creds)
+        self.assertNotIn("http", kwargs)
+
+    def test_library_http_does_not_treat_308_as_redirect(self):
+        import httplib2
+        from googleapiclient.http import build_http
+
+        raw = httplib2.Http()
+        library = build_http()
+        self.assertIn(308, set(raw.redirect_codes))
+        self.assertNotIn(308, set(library.redirect_codes))
 
 
 def _wait_http(port, proc, timeout=25):

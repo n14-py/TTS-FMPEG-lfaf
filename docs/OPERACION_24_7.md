@@ -8,7 +8,7 @@ Este documento describe cómo desplegar, comprobar y revertir las correcciones d
 - El lock de video se libera si la tarea falla, si FFmpeg agota su tiempo o si el hilo no llega a arrancar.
 - FFmpeg, ffprobe y el `edge-tts` del botón Escuchar se ejecutan con tope de tiempo y, si se pasan, muere todo su grupo de procesos.
 - Edge TTS del noticiero reintenta tres veces con espera creciente. La voz no cambia.
-- YouTube y R2 tienen tiempos máximos de red para no dejar el servidor ocupado.
+- R2 tiene tiempos máximos de red. YouTube vuelve a usar el cliente de `googleapiclient` (`build(..., credentials=creds)`): un `httplib2.Http()` propio trataba el HTTP 308 de la subida reanudable como redirección y fallaba en todas las cuentas con `Redirected but the response is missing a Location: header.`
 - `/health` responde 200 mientras el proceso vive, también durante un render. Pasa a 503 solo si el supervisor declara el worker atascado y pide reinicio.
 - La limpieza de objetos R2 de más de 28 días no se activa sola. En Gunicorn nunca llegó a ejecutarse; ahora hace falta `R2_CLEANUP_ENABLED=1`.
 
@@ -22,8 +22,6 @@ Este documento describe cómo desplegar, comprobar y revertir las correcciones d
 | `GUNICORN_GRACEFUL_TIMEOUT` | `45` | Espera tras SIGTERM antes del cierre forzado. |
 | `TASK_HARD_TIMEOUT_SECONDS` | `10800` | Tope absoluto de una tarea. Mínimo interno: 600. |
 | `TTS_ATTEMPT_TIMEOUT_SECONDS` | `90` | Cada intento de Edge TTS del noticiero. |
-| `YOUTUBE_UPLOAD_TIMEOUT_SECONDS` | `900` | Tope de una subida a YouTube. |
-| `YOUTUBE_SOCKET_TIMEOUT_SECONDS` | `120` | Tope de cada lectura de red de esa subida. |
 | `MIN_FREE_DISK_MB` | `512` | Rechaza tareas nuevas por debajo de este espacio. |
 | `MIN_FREE_RAM_MB` | `120` | Rechaza tareas nuevas por debajo de esta RAM disponible. |
 | `MIN_RAM_FOR_AUDIO_DURING_VIDEO_MB` | `200` | Permite el MP3 de Escuchar mientras hay un video solo si hay esta RAM. |
