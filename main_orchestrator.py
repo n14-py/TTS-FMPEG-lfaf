@@ -17,6 +17,7 @@ from config import *
 import media_manager
 import background_fetcher
 import tts_engine
+import process_guard
 import scene_templates.ffmpeg_intro as ffmpeg_intro
 import scene_templates.ffmpeg_01_mapa as ffmpeg_mapa
 import scene_templates.ffmpeg_02_pexels as ffmpeg_pexels
@@ -75,8 +76,9 @@ def concatenar_escenas(lista_escenas, output_path, unique_id):
             output_path
         ])
         
-        # Le damos tiempo suficiente porque está renderizando el master final
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
+        # Le damos tiempo suficiente porque está renderizando el master final.
+        # Los argumentos de codificación no cambian; solo se controla el proceso.
+        process_guard.run(cmd, timeout=600, check=True, log_label="Orchestrator concat")
         
         return os.path.exists(output_path) and os.path.getsize(output_path) > 1024
         
@@ -90,17 +92,58 @@ def concatenar_escenas(lista_escenas, output_path, unique_id):
 # ==============================================================================
 # FUNCIÓN AUXILIAR: DESCARGAR MULTIMEDIA DE ANUNCIOS
 # ==============================================================================
-def descargar_recurso_ad(url, save_path):
+def _max_ad_bytes():
     try:
-        logger.info(f"  [Orchestrator] Descargando recurso publicitario: {url}")
-        r = requests.get(url, stream=True, timeout=15)
-        if r.status_code == 200:
-            with open(save_path, 'wb') as f:
-                for chunk in r.iter_content(8192):
-                    f.write(chunk)
-            return save_path
-    except Exception as e:
-        logger.error(f"  [Orchestrator] Error descargando anuncio: {e}")
+        return max(1, int(os.getenv("MAX_AD_DOWNLOAD_BYTES", str(200 * 1024 * 1024))))
+    except ValueError:
+        return 200 * 1024 * 1024
+
+
+def descargar_recurso_ad(url, save_path):
+    max_bytes = _max_ad_bytes()
+    for attempt in range(3):
+        try:
+            logger.info(f"  [Orchestrator] Descargando recurso publicitario: {url}")
+            r = requests.get(url, stream=True, timeout=15)
+            try:
+                saved = _guardar_anuncio(r, save_path, max_bytes)
+            finally:
+                r.close()
+            if saved == "retry":
+                pass
+            elif saved:
+                return save_path
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"  [Orchestrator] Error descargando anuncio: {e}")
+        if attempt < 2:
+            time.sleep(1 + attempt)
+    return None
+
+
+def _guardar_anuncio(response, save_path, max_bytes):
+    if response.status_code != 200:
+        if response.status_code in (429, 500, 502, 503, 504):
+            return "retry"
+        logger.error(f"  [Orchestrator] Anuncio respondió HTTP {response.status_code}.")
+        return None
+    total = 0
+    with open(save_path, 'wb') as handle:
+        for chunk in response.iter_content(8192):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > max_bytes:
+                logger.error("  [Orchestrator] El anuncio supera el tamaño máximo admitido.")
+                break
+            handle.write(chunk)
+    if total > max_bytes:
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        return None
+    if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+        return save_path
     return None
 
 # ==============================================================================
@@ -125,6 +168,9 @@ def process_video_payload(payload):
     
     try:
         for idx, scene in enumerate(scenes):
+            if process_guard.cancellation_requested():
+                logger.error("  [Orchestrator] Producción cancelada por el supervisor de estabilidad.")
+                return None
             logger.info(f"  --- Procesando Escena {idx + 1}/{len(scenes)} ---")
             
             scene_type = scene.get("type", "body") 
@@ -140,7 +186,11 @@ def process_video_payload(payload):
                     audio_filename = f"audio_{unique_id}_{idx}.mp3"
                     audio_path = os.path.join(TEMP_VIDEO_DIR, audio_filename)
                     # Generar un mp3 de silencio de 3 segundos por seguridad
-                    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "3", "-q:a", "9", "-acodec", "libmp3lame", audio_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    process_guard.run(
+                        ["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "3", "-q:a", "9", "-acodec", "libmp3lame", audio_path],
+                        timeout=30,
+                        log_label="Orchestrator silencio",
+                    )
                     archivos_temporales.append(audio_path)
                 else:
                     audio_filename = f"audio_{unique_id}_{idx}.mp3"
@@ -229,7 +279,7 @@ def process_video_payload(payload):
                 if scene_type == "body" and not miniatura_creada:
                     try:
                         cmd_thumb = ["ffmpeg", "-y", "-ss", "00:00:02", "-i", escena_output, "-vframes", "1", "-q:v", "2", thumbnail_output_path]
-                        subprocess.run(cmd_thumb, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        process_guard.run(cmd_thumb, timeout=60, check=True, log_label="Orchestrator miniatura")
                         if os.path.exists(thumbnail_output_path):
                             miniatura_creada = True 
                     except Exception:

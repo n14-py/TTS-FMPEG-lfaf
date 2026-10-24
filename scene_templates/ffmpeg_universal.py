@@ -14,6 +14,7 @@ import logging
 import subprocess
 import textwrap
 from config import *
+import process_guard
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def obtener_duracion_audio(audio_path):
     """Mide los segundos exactos del MP3"""
     cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
     try:
-        resultado = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=True)
+        resultado = process_guard.run(cmd, timeout=20, capture_output=True, check=True, log_label="ffprobe")
         return float(resultado.stdout.strip()) + 0.4
     except Exception:
         return 25.0
@@ -245,29 +246,22 @@ def ensamblar_escena(fondo_path, overlay_path, audio_tts_path, bgm_path, sfx_pat
 
     try:
         logger.info(f"    [FFmpeg] Ejecutando renderizado de la escena...")
-        proceso = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # ¡AQUÍ ESTÁ LA MAGIA! Le damos 600 segundos (10 minutos) para respirar
-        proceso.communicate(timeout=600) 
-        
+        # Mismo comando. El supervisor mata el grupo si pasa de 10 minutos.
+        proceso = process_guard.run(cmd, timeout=600, log_label="FFmpeg Universal")
+
+        if proceso.timed_out:
+            logger.error("  [FFmpeg Universal] TIMEOUT: La escena superó los 10 minutos. Matando proceso Zombi...")
+            return False
+
         if proceso.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             logger.info(f"  [FFmpeg Universal] ✅ ¡ÉXITO! Escena lista: {os.path.basename(output_path)}")
             return True
         else:
             logger.error("  [FFmpeg Universal] Falla: El archivo de salida está corrupto o vacío.")
             return False
-            
-    except subprocess.TimeoutExpired:
-        logger.error("  [FFmpeg Universal] TIMEOUT: La escena superó los 10 minutos. Matando proceso Zombi...")
-        proceso.kill() 
-        proceso.communicate() 
-        return False
-        
+
     except Exception as e:
         logger.error(f"  [FFmpeg Universal] Error inesperado en el sistema: {e}")
-        if 'proceso' in locals():
-            proceso.kill()
-            proceso.communicate()
         return False
         
     finally:

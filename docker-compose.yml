@@ -1,0 +1,15 @@
+# Arranque recomendado en el VPS. Reinicia el contenedor si el proceso muere
+# y conserva el historial local de videos ya marcados como subidos.
+# Las variables de producción se inyectan con --env-file o con el entorno
+# del panel. No se leen secretos desde este archivo.
+services:
+  tts-ffmpeg:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - tts_locks:/app/locks_history
+
+volumes:
+  tts_locks:

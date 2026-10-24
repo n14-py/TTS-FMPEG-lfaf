@@ -11,6 +11,7 @@ import os
 import subprocess
 import logging
 from config import *
+import process_guard
 
 logger = logging.getLogger(__name__)
 
@@ -21,25 +22,18 @@ def execute_ffmpeg_command(cmd, timeout=300):
     """
     Ejecuta un comando de FFmpeg de manera segura.
     Retorna True si fue exitoso, False si falló o hubo Timeout.
+    Los argumentos del comando no se modifican.
     """
     try:
         logger.info(f"  [FFmpeg Core] Ejecutando comando... (Timeout: {timeout}s)")
-        
-        # Ejecutar con subprocess.run para bloquear hasta que termine
-        subprocess.run(
-            cmd, 
-            check=True, 
-            stdout=subprocess.DEVNULL, # Oculta el log masivo de FFmpeg en consola
-            stderr=subprocess.DEVNULL, 
-            timeout=timeout
-        )
+        process_guard.run(cmd, timeout=timeout, check=True, log_label="FFmpeg Core")
         return True
-        
+
     except subprocess.TimeoutExpired:
         logger.error("  [FFmpeg Core] ERROR: El renderizado excedió el tiempo límite. Proceso abortado para proteger el servidor.")
         return False
-    except subprocess.CalledProcessError as err:
-        logger.error(f"  [FFmpeg Core] FALLO de FFmpeg: Posible falta de RAM o archivo de entrada corrupto.")
+    except subprocess.CalledProcessError:
+        logger.error("  [FFmpeg Core] FALLO de FFmpeg: Posible falta de RAM o archivo de entrada corrupto.")
         return False
     except Exception as e:
         logger.error(f"  [FFmpeg Core] Error inesperado en FFmpeg: {e}")

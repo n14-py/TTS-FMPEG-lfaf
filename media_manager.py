@@ -24,7 +24,7 @@ def get_random_file_from_dir(directory):
     Busca en un directorio dado y devuelve la ruta absoluta de un archivo al azar.
     Si la carpeta está vacía o no existe, devuelve None.
     """
-    if not os.path.exists(directory):
+    if not directory or not os.path.exists(directory):
         logger.warning(f"  [MediaManager] Directorio no encontrado: {directory}")
         return None
         
@@ -40,11 +40,27 @@ def get_random_file_from_dir(directory):
     chosen_file = random.choice(files)
     return os.path.join(directory, chosen_file)
 
+def _child_directory(parent, name):
+    """Acepta solo un subdirectorio directo. Rechaza rutas que salgan de assets."""
+    if not isinstance(name, str) or not name or name in (".", ".."):
+        return None
+    if os.path.basename(name) != name or "/" in name or "\\" in name or "\x00" in name:
+        logger.warning("  [MediaManager] Nombre de carpeta rechazado.")
+        return None
+    candidate = os.path.join(parent, name)
+    parent_real = os.path.realpath(parent)
+    candidate_real = os.path.realpath(candidate)
+    if candidate_real != parent_real and not candidate_real.startswith(parent_real + os.sep):
+        logger.warning("  [MediaManager] Ruta fuera de assets rechazada.")
+        return None
+    return candidate
+
+
 def get_random_bgm(mood):
     """
     Busca una música de fondo según el mood ('urgencia', 'analisis', 'tension').
     """
-    mood_dir = os.path.join(BGM_DIR, mood)
+    mood_dir = _child_directory(BGM_DIR, mood)
     bgm_path = get_random_file_from_dir(mood_dir)
     
     # Fallback de seguridad si no hay música en esa carpeta
@@ -63,7 +79,9 @@ def get_random_sfx(sfx_type):
     """
     Busca un efecto de sonido ('transiciones', 'impactos', 'alertas', 'tecnologia').
     """
-    sfx_dir = os.path.join(SFX_DIR, sfx_type)
+    sfx_dir = _child_directory(SFX_DIR, sfx_type)
+    if not sfx_dir:
+        return None
     return get_random_file_from_dir(sfx_dir)
 
 def get_random_template(template_type):
@@ -71,7 +89,9 @@ def get_random_template(template_type):
     Busca un video base según el tipo ('intros', 'hombre', 'mujer', 'sin_presentador').
     Devuelve la ruta absoluta.
     """
-    template_dir = os.path.join(TEMPLATES_DIR, template_type)
+    template_dir = _child_directory(TEMPLATES_DIR, template_type)
+    if not template_dir:
+        return None
     return get_random_file_from_dir(template_dir)
 
 # ==============================================================================

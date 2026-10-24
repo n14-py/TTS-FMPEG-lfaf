@@ -51,12 +51,21 @@ def upload_media_to_r2(file_path, file_name):
 
     try:
         # 2. Autenticación y Conexión Segura con Cloudflare (Vía S3 API)
+        if not PUBLIC_DOMAIN:
+            logger.error("  [Cloudflare R2] ❌ Error: Falta R2_PUBLIC_DOMAIN en el entorno.")
+            return None
+
         s3 = boto3.client(
             's3',
             endpoint_url=f'https://{ACCOUNT_ID}.r2.cloudflarestorage.com',
             aws_access_key_id=ACCESS_KEY,
             aws_secret_access_key=SECRET_KEY,
-            config=Config(signature_version='s3v4')
+            config=Config(
+                signature_version='s3v4',
+                connect_timeout=_r2_timeout("R2_CONNECT_TIMEOUT_SECONDS", 10),
+                read_timeout=_r2_timeout("R2_READ_TIMEOUT_SECONDS", 120),
+                retries={"max_attempts": 3, "mode": "standard"},
+            )
         )
         
         logger.info(f"  [Cloudflare R2] 🚀 Iniciando subida a la nube: {file_name} ...")
@@ -99,6 +108,13 @@ def upload_media_to_r2(file_path, file_name):
         # Captura cualquier error de red, de credenciales o de permisos en Cloudflare
         logger.error(f"  [Cloudflare R2] ❌ Error CRÍTICO durante la subida: {str(e)}")
         return None
+
+
+def _r2_timeout(env_name, default):
+    try:
+        return max(5, int(os.getenv(env_name, str(default))))
+    except ValueError:
+        return default
 
 # =====================================================================
 # 🛠️ MODO DE PRUEBA MANUAL (OPCIONAL)
@@ -151,7 +167,12 @@ def delete_old_files_from_r2(days_old=28):
             endpoint_url=f'https://{ACCOUNT_ID}.r2.cloudflarestorage.com',
             aws_access_key_id=ACCESS_KEY,
             aws_secret_access_key=SECRET_KEY,
-            config=Config(signature_version='s3v4')
+            config=Config(
+                signature_version='s3v4',
+                connect_timeout=_r2_timeout("R2_CONNECT_TIMEOUT_SECONDS", 10),
+                read_timeout=_r2_timeout("R2_READ_TIMEOUT_SECONDS", 120),
+                retries={"max_attempts": 3, "mode": "standard"},
+            )
         )
         
         logger.info(f"  [Cloudflare Limpieza] 🕒 Buscando archivos con más de {days_old} días de antigüedad...")
@@ -159,20 +180,32 @@ def delete_old_files_from_r2(days_old=28):
         # Calcular la fecha exacta de hace 28 días
         fecha_limite = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_old)
         
-        # Obtener la lista de archivos en el bucket
-        response = s3.list_objects_v2(Bucket=BUCKET_NAME)
-        
-        if 'Contents' not in response:
+        archivos_borrados = 0
+        token = None
+        vacio = True
+        while True:
+            kwargs = {"Bucket": BUCKET_NAME}
+            if token:
+                kwargs["ContinuationToken"] = token
+            response = s3.list_objects_v2(**kwargs)
+            contenidos = response.get("Contents") or []
+            if contenidos:
+                vacio = False
+            for obj in contenidos:
+                # Comparar la fecha de modificación del archivo con nuestra fecha límite
+                if obj['LastModified'] < fecha_limite:
+                    logger.info(f"  [Cloudflare Limpieza] 🗑️ Borrando archivo antiguo: {obj['Key']}")
+                    s3.delete_object(Bucket=BUCKET_NAME, Key=obj['Key'])
+                    archivos_borrados += 1
+            if not response.get("IsTruncated"):
+                break
+            token = response.get("NextContinuationToken")
+            if not token:
+                break
+
+        if vacio:
             logger.info("  [Cloudflare Limpieza] 📭 El bucket está vacío, no hay nada que borrar.")
             return True
-
-        archivos_borrados = 0
-        for obj in response['Contents']:
-            # Comparar la fecha de modificación del archivo con nuestra fecha límite
-            if obj['LastModified'] < fecha_limite:
-                logger.info(f"  [Cloudflare Limpieza] 🗑️ Borrando archivo antiguo: {obj['Key']}")
-                s3.delete_object(Bucket=BUCKET_NAME, Key=obj['Key'])
-                archivos_borrados += 1
                 
         if archivos_borrados > 0:
             logger.info(f"  [Cloudflare Limpieza] ✅ Limpieza terminada. Se borraron {archivos_borrados} archivos.")

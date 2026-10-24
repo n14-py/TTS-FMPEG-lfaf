@@ -12,6 +12,8 @@ import os
 import re
 import asyncio
 import logging
+import random
+import time
 import edge_tts
 from config import TEMP_AUDIO_DIR, VOICES
 
@@ -42,17 +44,38 @@ def sanitize_text_for_tts(text):
 # ==============================================================================
 # GENERADOR ASÍNCRONO DE AUDIO
 # ==============================================================================
+def _tts_attempt_timeout():
+    try:
+        return max(15, int(os.getenv("TTS_ATTEMPT_TIMEOUT_SECONDS", "90")))
+    except ValueError:
+        return 90
+
+
 async def _async_generate_audio(text, voice_code, output_path):
     """
     Función interna asíncrona que se comunica con Edge TTS.
+    El texto, la voz y el códec de salida no cambian: solo hay un tope de tiempo.
     """
     try:
         communicate = edge_tts.Communicate(text, voice_code)
-        await communicate.save(output_path)
+        await asyncio.wait_for(communicate.save(output_path), timeout=_tts_attempt_timeout())
         return True
+    except asyncio.TimeoutError:
+        logger.error("  [TTS Engine] Edge TTS superó el tiempo de espera.")
+        return False
     except Exception as e:
         logger.error(f"  [TTS Engine] Fallo interno en Edge TTS: {e}")
         return False
+
+
+def _tts_error_is_permanent(exc):
+    message = str(exc).lower()
+    permanent_markers = (
+        "invalid voice",
+        "voice not found",
+        "is not a valid voice",
+    )
+    return any(marker in message for marker in permanent_markers)
 
 # ==============================================================================
 # CONTROLADOR PRINCIPAL DEL MOTOR TTS
@@ -87,26 +110,29 @@ def generate_audio_clip(text, voice_key, filename):
         except OSError:
             logger.warning(f"  [TTS Engine] No se pudo sobrescribir {output_path}")
     
-    # 4. Generación con reintentos
+    # 4. Generación con reintentos acotados y espera creciente.
+    # La voz y el texto limpio son los mismos de siempre.
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # Ejecutar el loop asíncrono desde código síncrono
             success = asyncio.run(_async_generate_audio(clean_text, voice_code, output_path))
-            
+
             if success and os.path.exists(output_path) and os.path.getsize(output_path) > 100:
                 logger.info(f"  [TTS Engine] Éxito: {filename} generado correctamente.")
                 return output_path
             else:
                 logger.warning(f"  [TTS Engine] Archivo vacío o no generado. Intento {attempt + 1}/{max_retries}")
-                
+
         except Exception as e:
             logger.warning(f"  [TTS Engine] Error en intento {attempt + 1}: {e}")
-            
-        # Pequeña pausa antes de reintentar si el servidor de Microsoft rechazó la conexión
-        import time
-        time.sleep(1.5)
-        
+            if _tts_error_is_permanent(e):
+                logger.error("  [TTS Engine] Error permanente de voz. No se reintenta.")
+                break
+
+        if attempt < max_retries - 1:
+            delay = min(8, 2 ** attempt) + random.uniform(0, 0.4)
+            time.sleep(delay)
+
     logger.error(f"  [TTS Engine] ERROR FATAL: No se pudo generar audio para {filename} tras {max_retries} intentos.")
     return None
 
