@@ -5,13 +5,14 @@ import subprocess
 import textwrap
 import uuid
 from config import *
+import process_guard
 
 logger = logging.getLogger(__name__)
 
 def obtener_duracion_audio(audio_path):
     cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
     try:
-        resultado = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=True)
+        resultado = process_guard.run(cmd, timeout=20, capture_output=True, check=True, log_label="ffprobe")
         return float(resultado.stdout.strip()) + 0.4
     except Exception:
         return 25.0
@@ -19,7 +20,7 @@ def obtener_duracion_audio(audio_path):
 def tiene_audio(filepath):
     cmd = ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0", filepath]
     try:
-        resultado = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        resultado = process_guard.run(cmd, timeout=20, capture_output=True, log_label="ffprobe")
         return len(resultado.stdout.strip()) > 0
     except Exception:
         return False
@@ -85,7 +86,7 @@ def renderizar_ad_video(ad_media_path, output_path):
     cmd.append(output_path)
 
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
+        process_guard.run(cmd, timeout=600, check=True, log_label="FFmpeg Ads")
         return os.path.exists(output_path)
     except Exception as e:
         logger.error(f"  [FFmpeg Ads] ❌ Error: {e}")
@@ -174,7 +175,7 @@ def renderizar_mencion(ad_media_path, overlay_path, audio_tts_path, bgm_path, sf
     ])
 
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
+        process_guard.run(cmd, timeout=600, check=True, log_label="FFmpeg Ads mencion")
         return os.path.exists(output_path)
     except Exception as e:
         logger.error(f"  [FFmpeg Ads] ❌ Error: {e}")

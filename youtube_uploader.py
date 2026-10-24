@@ -10,9 +10,12 @@ disponibles y evitar el error 403 (Quota Exceeded).
 
 import os
 import logging
+import time
+import httplib2
 from datetime import datetime
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
@@ -117,10 +120,27 @@ def get_authenticated_service(account_index):
             return None
             
     try:
-        return build('youtube', 'v3', credentials=creds)
+        # El cuerpo de la subida no cambia. El timeout evita que next_chunk
+        # deje el lock del servidor ocupado para siempre.
+        authed_http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_youtube_socket_timeout()))
+        return build('youtube', 'v3', http=authed_http, cache_discovery=False)
     except Exception as e:
         logger.error(f"  [YouTube Uploader] Error construyendo el servicio YouTube: {e}")
         return None
+
+
+def _youtube_socket_timeout():
+    try:
+        return max(30, int(os.getenv("YOUTUBE_SOCKET_TIMEOUT_SECONDS", "120")))
+    except ValueError:
+        return 120
+
+
+def _youtube_upload_deadline():
+    try:
+        return max(120, int(os.getenv("YOUTUBE_UPLOAD_TIMEOUT_SECONDS", "900")))
+    except ValueError:
+        return 900
 
 def upload_video(file_path, title, description, tags, category_id="25", thumbnail_path=None):
     """
@@ -160,8 +180,12 @@ def upload_video(file_path, title, description, tags, category_id="25", thumbnai
             
             response = None
             logger.info("  [YouTube Uploader] Transfiriendo bytes a YouTube...")
-            
+            deadline = time.monotonic() + _youtube_upload_deadline()
+
             while response is None:
+                if time.monotonic() > deadline:
+                    logger.error("  [YouTube Uploader] La subida superó el tiempo máximo. Se aborta para liberar el servidor.")
+                    return None
                 status, response = request.next_chunk()
                 
             video_id = response.get('id')
@@ -196,7 +220,13 @@ def upload_video(file_path, title, description, tags, category_id="25", thumbnai
         
             
         except HttpError as e:
-            if e.resp.status in [403, 429] and "quotaExceeded" in e.content.decode('utf-8'):
+            body = ""
+            try:
+                raw = e.content or b""
+                body = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            except Exception:
+                body = ""
+            if e.resp.status in [403, 429] and "quotaExceeded" in body:
                 logger.warning(f"  [YouTube Uploader] CUOTA LLENA en Cuenta {account_index}. Cambiando a la siguiente...")
                 continue # Pasa a la siguiente cuenta del ciclo
             else:

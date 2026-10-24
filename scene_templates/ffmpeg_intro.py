@@ -13,6 +13,7 @@ import logging
 import subprocess
 import textwrap
 from config import *
+import process_guard
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ def ensamblar_intro(intro_path, audio_tts_path, bgm_path, sfx_path, texto, outpu
 
     # 7. EJECUCIÓN
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=200)
+        process_guard.run(cmd, timeout=200, check=True, log_label="FFmpeg Intro")
         
         if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             logger.info("  [FFmpeg Intro] Intro renderizada con éxito.")

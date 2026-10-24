@@ -15,6 +15,7 @@ import requests
 import subprocess
 import urllib.parse
 from config import *
+import process_guard
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,42 @@ _historial_pexels = []
 # Pon aquí la URL directa a tu logo para el 1% de casos que fallen
 URL_LOGO_FALLBACK = "https://noticias.lat/favicon.png" 
 
+def _max_image_bytes():
+    try:
+        return max(1024, int(os.getenv("MAX_IMAGE_DOWNLOAD_BYTES", str(25 * 1024 * 1024))))
+    except ValueError:
+        return 25 * 1024 * 1024
+
+
+def _guardar_respuesta(response, save_path, max_bytes):
+    """Escribe el cuerpo tal cual, y aborta si supera el tope para no agotar la RAM."""
+    total = 0
+    try:
+        with open(save_path, "wb") as handle:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    break
+                handle.write(chunk)
+    except Exception:
+        if os.path.exists(save_path):
+            try:
+                os.remove(save_path)
+            except OSError:
+                pass
+        return False
+    if total > max_bytes or total <= 0:
+        if os.path.exists(save_path):
+            try:
+                os.remove(save_path)
+            except OSError:
+                pass
+        return False
+    return True
+
+
 def sanitizar_imagen(ruta_archivo):
     """Verifica silenciosamente si es una imagen real sin ensuciar la consola"""
     clean_path = ruta_archivo + "_clean.jpg"
@@ -48,7 +85,7 @@ def sanitizar_imagen(ruta_archivo):
     ]
     try:
         # Silenciamos la salida completamente
-        subprocess.run(cmd_sanitize, timeout=10, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process_guard.run(cmd_sanitize, timeout=10, check=True, log_label="Fetcher imagen")
         os.replace(clean_path, ruta_archivo) 
         return True
     except:
@@ -75,12 +112,13 @@ def obtener_imagen_noticia(url, save_path, retries=3):
         # INTENTO 1: Descarga Directa Disfrazada
         # ==========================================
         try:
-            r = requests.get(url, headers=cabeceras_falsas, timeout=10)
-            if r.status_code == 200:
-                with open(save_path, 'wb') as f:
-                    f.write(r.content)
-                if os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
-                    return save_path
+            r = requests.get(url, headers=cabeceras_falsas, timeout=10, stream=True)
+            try:
+                if r.status_code == 200 and _guardar_respuesta(r, save_path, _max_image_bytes()):
+                    if os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
+                        return save_path
+            finally:
+                r.close()
         except Exception:
             pass
 
@@ -89,13 +127,14 @@ def obtener_imagen_noticia(url, save_path, retries=3):
         # ==========================================
         try:
             url_magica = f"https://images10-focus-opensocial.googleusercontent.com/gadgets/proxy?container=focus&refresh=2592000&url={url}"
-            r_proxy = requests.get(url_magica, timeout=10)
-            if r_proxy.status_code == 200:
-                with open(save_path, 'wb') as f:
-                    f.write(r_proxy.content)
-                if os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
-                    logger.info("  [Fetcher] Imagen obtenida exitosamente usando el Puente de Google.")
-                    return save_path
+            r_proxy = requests.get(url_magica, timeout=10, stream=True)
+            try:
+                if r_proxy.status_code == 200 and _guardar_respuesta(r_proxy, save_path, _max_image_bytes()):
+                    if os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
+                        logger.info("  [Fetcher] Imagen obtenida exitosamente usando el Puente de Google.")
+                        return save_path
+            finally:
+                r_proxy.close()
         except Exception:
             pass
             
@@ -106,12 +145,13 @@ def obtener_imagen_noticia(url, save_path, retries=3):
     # =========================================================================
     logger.warning(f"  [Fetcher] Bloqueo extremo detectado. Usando LOGO DE RESPALDO...")
     try:
-        r_logo = requests.get(URL_LOGO_FALLBACK, verify=False, timeout=10)
-        if r_logo.status_code == 200:
-            with open(save_path, 'wb') as f:
-                f.write(r_logo.content)
-            if sanitizar_imagen(save_path):
-                return save_path
+        r_logo = requests.get(URL_LOGO_FALLBACK, verify=False, timeout=10, stream=True)
+        try:
+            if r_logo.status_code == 200 and _guardar_respuesta(r_logo, save_path, _max_image_bytes()):
+                if sanitizar_imagen(save_path):
+                    return save_path
+        finally:
+            r_logo.close()
     except Exception as e:
         logger.error(f"  [Fetcher] Falló hasta el logo de respaldo: {e}")
         
@@ -147,14 +187,16 @@ def obtener_mapa_mapbox(ubicacion_texto, save_path):
         mapa_url = f"https://api.mapbox.com/styles/v1/mapbox/{estilo}/static/pin-s-marker+ff0000({lon},{lat})/{lon},{lat},{zoom},0,0/{ancho}x{alto}?access_token={MAPBOX_API_KEY}"
         
         mapa_res = requests.get(mapa_url, stream=True, timeout=15)
-        if mapa_res.status_code == 200:
-            with open(save_path, 'wb') as f:
-                for chunk in mapa_res.iter_content(8192):
-                    f.write(chunk)
-            return save_path
-        else:
+        try:
+            if mapa_res.status_code == 200:
+                if _guardar_respuesta(mapa_res, save_path, _max_image_bytes()):
+                    return save_path
+                logger.error("  [Fetcher] El mapa de Mapbox no se pudo guardar.")
+                return None
             logger.error(f"  [Fetcher] Error Mapbox: HTTP {mapa_res.status_code}")
             return None
+        finally:
+            mapa_res.close()
             
     except Exception as e:
         logger.error(f"  [Fetcher] Error fatal en Mapbox: {e}")
@@ -174,7 +216,7 @@ def sanitizar_video(ruta_archivo):
         ruta_archivo
     ]
     try:
-        resultado = subprocess.run(cmd_check, capture_output=True, text=True, timeout=5)
+        resultado = process_guard.run(cmd_check, timeout=5, capture_output=True, log_label="Fetcher ffprobe")
         # Si ffprobe responde "video", entonces es un MP4 válido
         if "video" in resultado.stdout.lower():
             return True
@@ -232,23 +274,45 @@ def obtener_video_stock(termino_busqueda, save_path):
         logger.info(f"  [Pexels] Descargando ID: {video_elegido['id']}")
         
         r = requests.get(video_link, stream=True, timeout=30)
-        if r.status_code == 200:
-            with open(save_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=1024*1024):
-                    if chunk: f.write(chunk)
-            
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
-                # BLINDAJE: Revisamos si es un video real antes de enviarlo
-                if sanitizar_video(save_path):
-                    return save_path
-                else:
-                    logger.warning("  [Fetcher] ¡Video falso/corrupto de Pexels detectado! Abortando escena de forma segura.")
-                    os.remove(save_path)
-                    return None
-        
-        logger.error(f"  [Fetcher] Error descargando MP4: HTTP {r.status_code}")
-        return None
+        try:
+            return _guardar_video_pexels(r, save_path)
+        finally:
+            r.close()
 
     except Exception as e:
         logger.error(f"  [Fetcher] Error fatal en la API de Pexels: {e}")
         return None
+
+
+def _guardar_video_pexels(r, save_path):
+    if r.status_code == 200:
+        try:
+            max_video = max(1024, int(os.getenv("MAX_PEXELS_DOWNLOAD_BYTES", str(300 * 1024 * 1024))))
+        except ValueError:
+            max_video = 300 * 1024 * 1024
+        total = 0
+        demasiado = False
+        with open(save_path, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=1024*1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_video:
+                    demasiado = True
+                    break
+                f.write(chunk)
+        if demasiado:
+            logger.warning("  [Fetcher] El video de Pexels supera el tamaño máximo. Se descarta.")
+            if os.path.exists(save_path):
+                os.remove(save_path)
+            return None
+
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
+            if sanitizar_video(save_path):
+                return save_path
+            logger.warning("  [Fetcher] ¡Video falso/corrupto de Pexels detectado! Abortando escena de forma segura.")
+            os.remove(save_path)
+            return None
+
+    logger.error(f"  [Fetcher] Error descargando MP4: HTTP {r.status_code}")
+    return None

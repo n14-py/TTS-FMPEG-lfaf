@@ -10,6 +10,7 @@ import subprocess
 import textwrap
 import uuid
 from config import *
+import process_guard
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +182,7 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
     ])
 
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
+        process_guard.run(cmd, timeout=600, check=True, log_label="FFmpeg Pexels")
         
         if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
             return True

@@ -15,13 +15,14 @@ import textwrap
 import urllib.parse
 import uuid
 from config import *
+import process_guard
 
 logger = logging.getLogger(__name__)
 
 def obtener_duracion_audio(audio_path):
     cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
     try:
-        resultado = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=True)
+        resultado = process_guard.run(cmd, timeout=20, capture_output=True, check=True, log_label="ffprobe")
         return float(resultado.stdout.strip()) + 0.4
     except Exception:
         return 25.0
@@ -178,19 +179,13 @@ def renderizar_escena_mapa(ubicacion_texto, overlay_mp4_path, audio_tts_path, bg
     
     # 5. Ejecutar el subproceso
     try:
-        proceso = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        proceso.communicate(timeout=200)
+        proceso = process_guard.run(cmd, timeout=200, log_label="FFmpeg 01 Mapa")
+        if proceso.timed_out:
+            logger.error("  [FFmpeg 01 Mapa] TIMEOUT: Matando zombi...")
+            return False
         return proceso.returncode == 0 and os.path.exists(output_path)
-    except subprocess.TimeoutExpired:
-        logger.error("  [FFmpeg 01 Mapa] TIMEOUT: Matando zombi...")
-        proceso.kill()
-        proceso.communicate()
-        return False
     except Exception as e:
         logger.error(f"  [FFmpeg 01 Mapa] Fallo crítico renderizando: {e}")
-        if 'proceso' in locals():
-            proceso.kill()
-            proceso.communicate()
         return False
     finally:
         # 1. Borrar el archivo de texto temporal
