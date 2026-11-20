@@ -255,6 +255,7 @@ def handle_generate_video():
     youtube_title = _string_or_default(payload.get('youtube_title'), 'Noticia de Última Hora')
     youtube_desc = _string_or_default(payload.get('youtube_description'), 'Mira la noticia completa en Noticias.lat')
     youtube_tags = _tag_list(payload.get('youtube_tags'))
+    youtube_comment = _string_or_default(payload.get('comentario'), '').strip()
 
     if youtube_uploader.is_already_processed(article_id):
         logger.info("  [API] Tarea %s ignorada. Ya existe en el historial.", article_id)
@@ -314,7 +315,8 @@ def handle_generate_video():
                     file_path=video_path,
                     title=youtube_title,
                     description=youtube_desc,
-                    tags=youtube_tags
+                    tags=youtube_tags,
+                    comment=youtube_comment
                 )
 
                 if youtube_id or url_r2:
