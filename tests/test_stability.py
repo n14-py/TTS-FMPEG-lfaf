@@ -283,6 +283,51 @@ class ApiStabilityTests(unittest.TestCase):
             release.set()
         self.assertTrue(_wait_unlock())
 
+    def test_generate_video_forwards_comentario(self):
+        captured = {}
+
+        def fake_upload(**kwargs):
+            captured.update(kwargs)
+            return "yt123"
+
+        with patch("app.youtube_uploader.is_already_processed", return_value=False), \
+                patch("app.main_orchestrator.process_video_payload", return_value="/tmp/noticia.mp4"), \
+                patch("app.os.path.exists", return_value=True), \
+                patch("app.cloudflare_r2.upload_media_to_r2", return_value="https://r2.example/video.mp4"), \
+                patch("app.youtube_uploader.upload_video", side_effect=fake_upload), \
+                patch("app.youtube_uploader.mark_as_processed"), \
+                patch("app.os.remove"):
+            response = self._post({
+                "article_id": "con-comentario",
+                "scenes": [{"type": "body", "text": "hola"}],
+                "comentario": "  El debate de la noticia  ",
+            })
+            self.assertEqual(response.status_code, 202)
+            self.assertTrue(_wait_unlock())
+        self.assertEqual(captured.get("comment"), "El debate de la noticia")
+
+    def test_generate_video_without_comentario_sends_no_text(self):
+        captured = {}
+
+        def fake_upload(**kwargs):
+            captured.update(kwargs)
+            return "yt124"
+
+        with patch("app.youtube_uploader.is_already_processed", return_value=False), \
+                patch("app.main_orchestrator.process_video_payload", return_value="/tmp/noticia.mp4"), \
+                patch("app.os.path.exists", return_value=True), \
+                patch("app.cloudflare_r2.upload_media_to_r2", return_value=None), \
+                patch("app.youtube_uploader.upload_video", side_effect=fake_upload), \
+                patch("app.youtube_uploader.mark_as_processed"), \
+                patch("app.os.remove"):
+            response = self._post({
+                "article_id": "sin-comentario",
+                "scenes": [{"type": "body", "text": "hola"}],
+            })
+            self.assertEqual(response.status_code, 202)
+            self.assertTrue(_wait_unlock())
+        self.assertEqual(captured.get("comment"), "")
+
     def test_low_disk_does_not_take_the_lock(self):
         with patch("app.service_guard.disk_allows_new_task", return_value=(False, 10)), \
                 patch("app.main_orchestrator.process_video_payload") as render:
@@ -392,6 +437,90 @@ class YouTubeUploadClientTests(unittest.TestCase):
         self.assertIsInstance(kwargs.get("credentials"), _Creds)
         self.assertNotIn("http", kwargs)
 
+    def test_auth_requests_comment_permission(self):
+        class _Creds:
+            valid = True
+
+        with patch("youtube_uploader.os.path.exists", return_value=True), \
+             patch("youtube_uploader.Credentials.from_authorized_user_file", return_value=_Creds()) as loader, \
+             patch("youtube_uploader.build", return_value=object()):
+            youtube_uploader.get_authenticated_service(0)
+
+        scopes = loader.call_args[0][1]
+        self.assertIn("https://www.googleapis.com/auth/youtube.upload", scopes)
+        self.assertIn("https://www.googleapis.com/auth/youtube.force-ssl", scopes)
+
+    def test_upload_comments_on_the_published_video(self):
+        youtube = _YouTubeDoble()
+        with patch("youtube_uploader.os.path.exists", side_effect=lambda path: path == "/tmp/noticia.mp4"), \
+             patch("youtube_uploader.get_next_account_index", return_value=0), \
+             patch("youtube_uploader.get_authenticated_service", return_value=youtube), \
+             patch("youtube_uploader.MediaFileUpload", return_value=object()):
+            video_id = youtube_uploader.upload_video(
+                "/tmp/noticia.mp4",
+                "Titulo de la noticia",
+                "Descripcion",
+                ["noticias"],
+                comment="💬 ¡Queremos conocer tu opinión!\n\n¿Qué harías en este caso?",
+            )
+
+        self.assertEqual(video_id, "vid123")
+        self.assertEqual(len(youtube.comments.calls), 1)
+        part, body = youtube.comments.calls[0]
+        self.assertEqual(part, "snippet")
+        self.assertEqual(body["snippet"]["videoId"], "vid123")
+        self.assertEqual(
+            body["snippet"]["topLevelComment"]["snippet"]["textOriginal"],
+            "💬 ¡Queremos conocer tu opinión!\n\n¿Qué harías en este caso?",
+        )
+
+    def test_upload_without_comment_does_not_post(self):
+        youtube = _YouTubeDoble()
+        with patch("youtube_uploader.os.path.exists", side_effect=lambda path: path == "/tmp/noticia.mp4"), \
+             patch("youtube_uploader.get_next_account_index", return_value=0), \
+             patch("youtube_uploader.get_authenticated_service", return_value=youtube), \
+             patch("youtube_uploader.MediaFileUpload", return_value=object()):
+            video_id = youtube_uploader.upload_video("/tmp/noticia.mp4", "Titulo", "Desc", ["noticias"])
+        self.assertEqual(video_id, "vid123")
+        self.assertEqual(youtube.comments.calls, [])
+
+    def test_comment_failure_keeps_the_published_video(self):
+        from googleapiclient.errors import HttpError
+
+        class _Resp:
+            status = 403
+            reason = "Forbidden"
+
+        youtube = _YouTubeDoble(comment_error=HttpError(
+            _Resp(),
+            b'{"error":{"errors":[{"reason":"insufficientPermissions"}]}}',
+        ))
+        with patch("youtube_uploader.os.path.exists", side_effect=lambda path: path == "/tmp/noticia.mp4"), \
+             patch("youtube_uploader.get_next_account_index", return_value=0), \
+             patch("youtube_uploader.get_authenticated_service", return_value=youtube), \
+             patch("youtube_uploader.MediaFileUpload", return_value=object()):
+            video_id = youtube_uploader.upload_video(
+                "/tmp/noticia.mp4", "Titulo", "Desc", ["noticias"], comment="Un debate"
+            )
+        self.assertEqual(video_id, "vid123")
+
+    def test_comment_retries_while_the_video_is_processing(self):
+        from googleapiclient.errors import HttpError
+
+        class _Resp:
+            status = 400
+            reason = "Bad Request"
+
+        error = HttpError(_Resp(), b'{"error":{"errors":[{"reason":"processingFailure"}]}}')
+        youtube = _YouTubeDoble(comment_results=[error, {"id": "cmt-2"}])
+        with patch("youtube_uploader.time.sleep") as dormir:
+            posted = youtube_uploader.publicar_comentario(youtube, "vid123", "x" * 10001)
+        self.assertTrue(posted)
+        dormir.assert_called_once_with(8)
+        texto = youtube.comments.calls[-1][1]["snippet"]["topLevelComment"]["snippet"]["textOriginal"]
+        self.assertEqual(len(texto), 10000)
+        self.assertEqual(len(youtube.comments.calls), 2)
+
     def test_library_http_does_not_treat_308_as_redirect(self):
         import httplib2
         from googleapiclient.http import build_http
@@ -400,6 +529,50 @@ class YouTubeUploadClientTests(unittest.TestCase):
         library = build_http()
         self.assertIn(308, set(raw.redirect_codes))
         self.assertNotIn(308, set(library.redirect_codes))
+
+
+class _CommentCall:
+    def __init__(self, result):
+        self.result = result
+
+    def execute(self):
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+class _CommentThreads:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    def insert(self, part=None, body=None):
+        self.calls.append((part, body))
+        result = self.results.pop(0) if self.results else {"id": "cmt"}
+        return _CommentCall(result)
+
+
+class _VideoInsert:
+    def next_chunk(self):
+        return None, {"id": "vid123"}
+
+
+class _Videos:
+    def insert(self, **kwargs):
+        return _VideoInsert()
+
+
+class _YouTubeDoble:
+    def __init__(self, comment_error=None, comment_results=None):
+        if comment_results is None:
+            comment_results = [comment_error] if comment_error else [{"id": "cmt"}]
+        self.comments = _CommentThreads(comment_results)
+
+    def videos(self):
+        return _Videos()
+
+    def commentThreads(self):
+        return self.comments
 
 
 def _wait_http(port, proc, timeout=25):

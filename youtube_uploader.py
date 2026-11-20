@@ -10,6 +10,7 @@ disponibles y evitar el error 403 (Quota Exceeded).
 
 import os
 import logging
+import time
 from datetime import datetime
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -22,7 +23,14 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 # CONFIGURACIÓN DE YOUTUBE
 # ==============================================================================
-SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+# youtube.upload publica el video. youtube.force-ssl es el permiso para
+# dejar el comentario que manda la API (campo "comentario") en ese video.
+# Los token_*.json ya fueron autorizados con este permiso en generar_token.py.
+SCOPES = [
+    'https://www.googleapis.com/auth/youtube.upload',
+    'https://www.googleapis.com/auth/youtube.force-ssl',
+]
+YOUTUBE_COMMENT_MAX = 10000
 MAX_ACCOUNTS = 4  # Tienes configurados del token_0 al token_5
 BASE_DIR = os.getcwd()
 LOCKS_DIR = os.path.join(BASE_DIR, "locks_history")
@@ -127,7 +135,63 @@ def get_authenticated_service(account_index):
         logger.error(f"  [YouTube Uploader] Error construyendo el servicio YouTube: {e}")
         return None
 
-def upload_video(file_path, title, description, tags, category_id="25", thumbnail_path=None):
+def _cuerpo_error_http(error):
+    try:
+        raw = error.content or b""
+        return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+    except Exception:
+        return ""
+
+
+def publicar_comentario(youtube, video_id, comment):
+    """Publica en el video el comentario recibido. Un fallo aquí no anula la subida."""
+    texto = comment.strip() if isinstance(comment, str) else ""
+    if not texto:
+        return False
+    if len(texto) > YOUTUBE_COMMENT_MAX:
+        logger.warning(
+            "  [YouTube Uploader] El comentario supera %s caracteres. Se recorta.",
+            YOUTUBE_COMMENT_MAX,
+        )
+        texto = texto[:YOUTUBE_COMMENT_MAX]
+
+    cuerpo = {
+        "snippet": {
+            "videoId": video_id,
+            "topLevelComment": {
+                "snippet": {
+                    "textOriginal": texto
+                }
+            }
+        }
+    }
+
+    for intento in range(3):
+        try:
+            youtube.commentThreads().insert(part="snippet", body=cuerpo).execute()
+            logger.info("  [YouTube Uploader] Comentario publicado en https://youtu.be/%s", video_id)
+            return True
+        except HttpError as error:
+            detalle = _cuerpo_error_http(error)
+            transitorio = error.resp.status in (429, 500, 502, 503) or any(
+                marca in detalle for marca in ("processingFailure", "videoNotFound", "backendError")
+            )
+            if transitorio and intento < 2:
+                logger.warning(
+                    "  [YouTube Uploader] El video todavía no acepta el comentario. Reintento %s/3.",
+                    intento + 2,
+                )
+                time.sleep(8)
+                continue
+            logger.warning("  [YouTube Uploader] No se pudo publicar el comentario: %s", error)
+            return False
+        except Exception as error:
+            logger.warning("  [YouTube Uploader] No se pudo publicar el comentario: %s", error)
+            return False
+    return False
+
+
+def upload_video(file_path, title, description, tags, category_id="25", thumbnail_path=None, comment=None):
     """
     Intenta subir el video. Si la cuenta actual se quedó sin cuota (403),
     salta automáticamente a la siguiente cuenta en el loop.
@@ -196,17 +260,14 @@ def upload_video(file_path, title, description, tags, category_id="25", thumbnai
                 logger.warning("  [YouTube Uploader] No se encontró ninguna miniatura para subir.")
             # ==========================================
 
+            publicar_comentario(youtube, video_id, comment)
+
             return video_id
         
         
             
         except HttpError as e:
-            body = ""
-            try:
-                raw = e.content or b""
-                body = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-            except Exception:
-                body = ""
+            body = _cuerpo_error_http(e)
             if e.resp.status in [403, 429] and "quotaExceeded" in body:
                 logger.warning(f"  [YouTube Uploader] CUOTA LLENA en Cuenta {account_index}. Cambiando a la siguiente...")
                 continue # Pasa a la siguiente cuenta del ciclo
