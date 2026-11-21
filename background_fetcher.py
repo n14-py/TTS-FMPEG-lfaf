@@ -234,7 +234,7 @@ def obtener_video_stock(termino_busqueda, save_path):
 
     try:
         query = urllib.parse.quote(termino_busqueda)
-        url = f"https://api.pexels.com/videos/search?query={query}&orientation=landscape&per_page=15"
+        url = f"https://api.pexels.com/v1/videos/search?query={query}&orientation=landscape&per_page=15"
         headers = {'Authorization': PEXELS_API_KEY}
         
         response = requests.get(url, headers=headers, timeout=10)
