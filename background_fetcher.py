@@ -206,6 +206,15 @@ def obtener_mapa_mapbox(ubicacion_texto, save_path):
 # 3. RECOLECTOR DE B-ROLL (PEXELS CON MEMORIA ANTI-DUPLICACIÓN Y BLINDAJE)
 # ==============================================================================
 
+def _parece_mp4(ruta_archivo):
+    try:
+        with open(ruta_archivo, "rb") as handle:
+            cabecera = handle.read(32)
+    except OSError:
+        return False
+    return b"ftyp" in cabecera
+
+
 def sanitizar_video(ruta_archivo):
     """Verifica silenciosamente que el archivo bajado de Pexels sea un video real"""
     cmd_check = [
@@ -216,68 +225,136 @@ def sanitizar_video(ruta_archivo):
         ruta_archivo
     ]
     try:
-        resultado = process_guard.run(cmd_check, timeout=5, capture_output=True, log_label="Fetcher ffprobe")
+        resultado = process_guard.run(cmd_check, timeout=20, capture_output=True, log_label="Fetcher ffprobe")
         # Si ffprobe responde "video", entonces es un MP4 válido
-        if "video" in resultado.stdout.lower():
+        if "video" in (resultado.stdout or "").lower():
             return True
-        return False
-    except:
-        return False
+    except Exception:
+        pass
+    # Un MP4 real empieza con ftyp. Si ffprobe no alcanzó a leerlo, no lo tiramos.
+    return _parece_mp4(ruta_archivo)
+
+
+def _termino_pexels(termino):
+    """La API a veces manda null o una lista. quote() revienta con eso y no se baja nada."""
+    if isinstance(termino, (list, tuple)):
+        partes = [str(parte).strip() for parte in termino if str(parte).strip() and str(parte).strip().lower() != "none"]
+        termino = " ".join(partes)
+    elif not isinstance(termino, str):
+        termino = ""
+    texto = " ".join(termino.replace("\n", " ").split())
+    if texto.lower() == "none":
+        texto = ""
+    return texto[:80] or "news"
+
+
+def _elegir_enlace_pexels(video_files):
+    """Elige un MP4 cercano a 1280 px. El más ancho tarda y se corta por timeout."""
+    candidatos = []
+    for archivo in video_files or []:
+        if not isinstance(archivo, dict):
+            continue
+        enlace = archivo.get("link")
+        if not enlace:
+            continue
+        tipo = str(archivo.get("file_type") or "").lower()
+        ruta = str(enlace).split("?", 1)[0].lower()
+        if tipo and "mp4" not in tipo and not ruta.endswith(".mp4"):
+            continue
+        try:
+            ancho = int(archivo.get("width") or 0)
+        except (TypeError, ValueError):
+            ancho = 0
+        candidatos.append((ancho, str(archivo.get("quality") or ""), enlace))
+    hd = [item for item in candidatos if item[1] == "hd" and item[0] >= 1280]
+    pool = hd or candidatos
+    if not pool:
+        return None
+    pool.sort(key=lambda item: (abs((item[0] or 1280) - 1280), item[0] or 99999))
+    return pool[0][2]
+
+
+def _buscar_videos_pexels(termino):
+    query = urllib.parse.quote(_termino_pexels(termino))
+    headers = {
+        "Authorization": PEXELS_API_KEY,
+        "User-Agent": "NoticiasLAT-VideoBot/1.0",
+    }
+    endpoints = [
+        "https://api.pexels.com/videos/search?query=%s&orientation=landscape&per_page=15" % query,
+        "https://api.pexels.com/v1/videos/search?query=%s&orientation=landscape&per_page=15" % query,
+    ]
+    for url in endpoints:
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+        except requests.RequestException as exc:
+            logger.warning("  [Fetcher] Pexels no respondió: %s", exc)
+            continue
+        try:
+            data = response.json()
+        except ValueError:
+            logger.warning("  [Fetcher] Pexels no devolvió JSON (HTTP %s).", response.status_code)
+            continue
+        videos = data.get("videos") if isinstance(data, dict) else None
+        if response.status_code == 200 and videos:
+            return videos
+        detalle = ""
+        if isinstance(data, dict):
+            detalle = str(data.get("error") or data.get("status") or "")[:160]
+        logger.warning("  [Fetcher] Búsqueda Pexels HTTP %s. %s", response.status_code, detalle)
+    return []
+
 
 def obtener_video_stock(termino_busqueda, save_path):
     global _historial_pexels
-    logger.info(f"  [Fetcher] Buscando video B-Roll sobre: '{termino_busqueda}'")
+    termino = _termino_pexels(termino_busqueda)
+    logger.info(f"  [Fetcher] Buscando video B-Roll sobre: '{termino}'")
     
     if PEXELS_API_KEY == "TU_CLAVE_PEXELS_AQUI":
         logger.error("  [Fetcher] ERROR: Falta PEXELS_API_KEY.")
         return None
 
     try:
-        query = urllib.parse.quote(termino_busqueda)
-        url = f"https://api.pexels.com/v1/videos/search?query={query}&orientation=landscape&per_page=15"
-        headers = {'Authorization': PEXELS_API_KEY}
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        data = response.json()
-        
-        if not data.get('videos') or len(data['videos']) == 0:
-            logger.warning(f"  [Fetcher] Cero resultados en Pexels para '{termino_busqueda}'.")
+        carpeta = os.path.dirname(save_path)
+        if carpeta:
+            os.makedirs(carpeta, exist_ok=True)
+
+        videos = _buscar_videos_pexels(termino)
+        if not videos:
+            logger.warning(f"  [Fetcher] Cero resultados en Pexels para '{termino}'.")
             return None
             
-        videos_disponibles = [v for v in data['videos'] if v['id'] not in _historial_pexels]
-        
+        videos_disponibles = [v for v in videos if isinstance(v, dict) and v.get("id") not in _historial_pexels]
         if not videos_disponibles:
-            videos_disponibles = data['videos']
+            videos_disponibles = [v for v in videos if isinstance(v, dict)]
+        random.shuffle(videos_disponibles)
 
-        video_elegido = random.choice(videos_disponibles)
-        
-        _historial_pexels.append(video_elegido['id'])
-        if len(_historial_pexels) > 50:
-            _historial_pexels.pop(0)
-
-        video_link = None
-        video_files = video_elegido.get('video_files', [])
-        
-        video_files.sort(key=lambda x: x.get('width', 0), reverse=True)
-        
-        for file in video_files:
-            if file.get('link') and file.get('quality') == 'hd' and file.get('width', 0) >= 1280:
-                video_link = file['link']
-                break
-                
-        if not video_link and video_files:
-            video_link = video_files[0].get('link')
-            
-        if not video_link:
-            return None
-            
-        logger.info(f"  [Pexels] Descargando ID: {video_elegido['id']}")
-        
-        r = requests.get(video_link, stream=True, timeout=30)
-        try:
-            return _guardar_video_pexels(r, save_path)
-        finally:
-            r.close()
+        for video_elegido in videos_disponibles[:4]:
+            video_link = _elegir_enlace_pexels(video_elegido.get("video_files"))
+            if not video_link:
+                continue
+            video_id = video_elegido.get("id")
+            logger.info(f"  [Pexels] Descargando ID: {video_id}")
+            try:
+                r = requests.get(
+                    video_link,
+                    stream=True,
+                    timeout=(10, 90),
+                    headers={"User-Agent": "NoticiasLAT-VideoBot/1.0"},
+                )
+            except requests.RequestException as exc:
+                logger.warning("  [Fetcher] No se pudo bajar el video %s: %s", video_id, exc)
+                continue
+            try:
+                guardado = _guardar_video_pexels(r, save_path)
+            finally:
+                r.close()
+            if guardado:
+                _historial_pexels.append(video_id)
+                if len(_historial_pexels) > 50:
+                    _historial_pexels.pop(0)
+                return guardado
+        return None
 
     except Exception as e:
         logger.error(f"  [Fetcher] Error fatal en la API de Pexels: {e}")
@@ -313,6 +390,8 @@ def _guardar_video_pexels(r, save_path):
             logger.warning("  [Fetcher] ¡Video falso/corrupto de Pexels detectado! Abortando escena de forma segura.")
             os.remove(save_path)
             return None
+        logger.error("  [Fetcher] El MP4 de Pexels llegó vacío.")
+        return None
 
     logger.error(f"  [Fetcher] Error descargando MP4: HTTP {r.status_code}")
     return None
