@@ -239,7 +239,7 @@ def process_video_payload(payload):
                     )
                     
             elif scene_type == "pexels":
-                termino = scene.get("termino_busqueda", "news")
+                termino = scene.get("termino_busqueda") or "news"
                 overlay_path = media_manager.get_random_template(scene.get("layout_category", "sin_presentador"))
                 if overlay_path:
                     exito = ffmpeg_pexels.renderizar_escena_pexels(

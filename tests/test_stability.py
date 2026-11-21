@@ -420,6 +420,118 @@ class GunicornInvalidRequestTests(unittest.TestCase):
                 proc.wait(timeout=5)
 
 
+class PexelsDownloadTests(unittest.TestCase):
+    def test_null_search_term_becomes_news(self):
+        import background_fetcher
+        self.assertEqual(background_fetcher._termino_pexels(None), "news")
+        self.assertEqual(background_fetcher._termino_pexels("  "), "news")
+        self.assertEqual(background_fetcher._termino_pexels(["city", "night"]), "city night")
+
+    def test_file_choice_ignores_null_width_and_prefers_720p(self):
+        import background_fetcher
+        enlace = background_fetcher._elegir_enlace_pexels([
+            {"link": "https://cdn.example/grande.mp4", "quality": "hd", "width": 3840, "file_type": "video/mp4"},
+            {"link": "https://cdn.example/justo.mp4", "quality": "hd", "width": 1280, "file_type": "video/mp4"},
+            {"link": "https://cdn.example/roto.mp4", "quality": "hd", "width": None, "file_type": "video/mp4"},
+        ])
+        self.assertEqual(enlace, "https://cdn.example/justo.mp4")
+
+    def test_null_term_still_downloads_a_video(self):
+        import background_fetcher
+
+        class _Respuesta:
+            def __init__(self, status, payload=None, chunks=None):
+                self.status_code = status
+                self._payload = payload or {}
+                self._chunks = chunks or []
+
+            def json(self):
+                return self._payload
+
+            def iter_content(self, chunk_size=1024):
+                for chunk in self._chunks:
+                    yield chunk
+
+            def close(self):
+                return None
+
+        videos = {"videos": [{
+            "id": 77,
+            "video_files": [
+                {"link": "https://cdn.example/grande.mp4", "quality": "hd", "width": 3840, "file_type": "video/mp4"},
+                {"link": "https://cdn.example/justo.mp4", "quality": "hd", "width": 1280, "file_type": "video/mp4"},
+            ],
+        }]}
+        llamadas = []
+
+        def fake_get(url, headers=None, timeout=None, stream=False):
+            llamadas.append(url)
+            if "api.pexels.com" in url:
+                return _Respuesta(200, videos)
+            self.assertIn("justo.mp4", url)
+            return _Respuesta(200, chunks=[b"\x00\x00\x00\x18ftypmp42" + (b"v" * 2000)])
+
+        destino = "/tmp/pexels-null-term.mp4"
+        try:
+            with patch.object(background_fetcher, "PEXELS_API_KEY", "clave-de-prueba"), \
+                    patch.object(background_fetcher, "_historial_pexels", []), \
+                    patch("background_fetcher.requests.get", side_effect=fake_get), \
+                    patch("background_fetcher.sanitizar_video", return_value=True):
+                guardado = background_fetcher.obtener_video_stock(None, destino)
+            self.assertEqual(guardado, destino)
+            self.assertTrue(os.path.exists(destino))
+            self.assertTrue(any("/videos/search" in url for url in llamadas))
+        finally:
+            if os.path.exists(destino):
+                os.remove(destino)
+
+    def test_second_video_is_used_when_the_first_download_fails(self):
+        import background_fetcher
+
+        class _Respuesta:
+            def __init__(self, status, payload=None, chunks=None):
+                self.status_code = status
+                self._payload = payload or {}
+                self._chunks = chunks or []
+
+            def json(self):
+                return self._payload
+
+            def iter_content(self, chunk_size=1024):
+                for chunk in self._chunks:
+                    yield chunk
+
+            def close(self):
+                return None
+
+        videos = {"videos": [
+            {"id": 1, "video_files": [{"link": "https://cdn.example/uno.mp4", "quality": "hd", "width": 1280, "file_type": "video/mp4"}]},
+            {"id": 2, "video_files": [{"link": "https://cdn.example/dos.mp4", "quality": "hd", "width": 1280, "file_type": "video/mp4"}]},
+        ]}
+
+        def fake_get(url, headers=None, timeout=None, stream=False):
+            if "api.pexels.com" in url:
+                return _Respuesta(200, videos)
+            if url.endswith("/uno.mp4"):
+                return _Respuesta(403, chunks=[b"no"])
+            return _Respuesta(200, chunks=[b"\x00\x00\x00\x18ftypmp42" + (b"v" * 2000)])
+
+        destino = "/tmp/pexels-retry.mp4"
+        try:
+            with patch.object(background_fetcher, "PEXELS_API_KEY", "clave-de-prueba"), \
+                    patch.object(background_fetcher, "_historial_pexels", []), \
+                    patch("background_fetcher.random.shuffle", side_effect=lambda items: None), \
+                    patch("background_fetcher.requests.get", side_effect=fake_get), \
+                    patch("background_fetcher.sanitizar_video", return_value=True):
+                guardado = background_fetcher.obtener_video_stock("city night", destino)
+            self.assertEqual(guardado, destino)
+            with open(destino, "rb") as handle:
+                self.assertIn(b"ftyp", handle.read(16))
+        finally:
+            if os.path.exists(destino):
+                os.remove(destino)
+
+
 class YouTubeUploadClientTests(unittest.TestCase):
     def test_service_uses_library_client(self):
         class _Creds:

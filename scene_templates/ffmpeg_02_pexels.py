@@ -35,6 +35,32 @@ def formatear_texto(texto, max_chars):
         return "\n".join(word_list[:3]) + "..." # Máximo 3 líneas
     return "\n".join(word_list)
 
+def _fondo_de_respaldo(unique_id):
+    """La imagen assets/images/default_news_bg.jpg no está en el repo. Se genera una."""
+    estatico = os.path.join(ASSETS_DIR, "images", "default_news_bg.jpg")
+    if os.path.exists(estatico):
+        return estatico
+    os.makedirs(TEMP_VIDEO_DIR, exist_ok=True)
+    destino = os.path.join(TEMP_VIDEO_DIR, "pexels_fallback_%s_%s.jpg" % (unique_id, uuid.uuid4().hex[:6]))
+    try:
+        process_guard.run(
+            [
+                "ffmpeg", "-y", "-f", "lavfi",
+                "-i", "color=c=0x0b1d36:s=%sx%s" % (RESOLUTION_W, RESOLUTION_H),
+                "-frames:v", "1", destino,
+            ],
+            timeout=20,
+            check=True,
+            log_label="Pexels fondo",
+        )
+    except Exception as exc:
+        logger.warning("  [Pexels] No se pudo crear el fondo de respaldo: %s", exc)
+        return None
+    if os.path.exists(destino) and os.path.getsize(destino) > 100:
+        return destino
+    return None
+
+
 # ==============================================================================
 # EL ENSAMBLADOR DE PEXELS
 # ==============================================================================
@@ -43,18 +69,26 @@ def renderizar_escena_pexels(termino, overlay_path, audio_tts_path, bgm_path, sf
     
     logger.info(f"  [Pexels] Buscando video para: '{termino}'...")
     
-    # Intentar descargar el video de Pexels
-    fondo_path = os.path.join(TEMP_VIDEO_DIR, f"pexels_bg_{unique_id}.mp4")
+    # Cada escena tiene su propio archivo. Si no, la siguiente pisa a la anterior.
+    fondo_path = os.path.join(TEMP_VIDEO_DIR, f"pexels_bg_{unique_id}_{uuid.uuid4().hex[:6]}.mp4")
     fondo_path = background_fetcher.obtener_video_stock(termino, fondo_path)
     
-    # Si falla, usamos un fondo por defecto
+    # Si falla, usamos un fondo por defecto que sí exista en disco.
     if not fondo_path:
-        fondo_path = os.path.join(ASSETS_DIR, "images", "default_news_bg.jpg")
-        logger.warning(f"  [Pexels] Falló la descarga. Usando fondo por defecto.")
+        fondo_path = _fondo_de_respaldo(unique_id)
+        if fondo_path:
+            logger.warning("  [Pexels] Falló la descarga. Usando fondo de respaldo.")
 
     # Validaciones de seguridad
-    if not os.path.exists(fondo_path) or not os.path.exists(overlay_path) or not os.path.exists(audio_tts_path):
-        logger.error("  [Pexels] Faltan archivos clave para ensamblar la escena.")
+    faltan = []
+    if not fondo_path or not os.path.exists(fondo_path):
+        faltan.append("fondo")
+    if not overlay_path or not os.path.exists(overlay_path):
+        faltan.append("plantilla %s" % overlay_path)
+    if not audio_tts_path or not os.path.exists(audio_tts_path):
+        faltan.append("audio %s" % audio_tts_path)
+    if faltan:
+        logger.error("  [Pexels] Faltan archivos clave para ensamblar la escena: %s.", ", ".join(faltan))
         return False
 
     # Configuración del diseño
