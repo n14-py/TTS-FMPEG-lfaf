@@ -9,6 +9,7 @@ disponibles y evitar el error 403 (Quota Exceeded).
 """
 
 import os
+import re
 import logging
 import time
 from datetime import datetime
@@ -143,9 +144,55 @@ def _cuerpo_error_http(error):
         return ""
 
 
+_INSTRUCCIONES_DEL_PEDIDO = re.compile(
+    r"question\s*\d+|pregunta\s*\d+\s*:|2-3 questions|must mention|what do you think|"
+    r"controversy|each on a new line|ending in|primera pregunta concreta|"
+    r"segunda pregunta,\s*distinta|devolvé únicamente",
+    re.IGNORECASE,
+)
+_PREGUNTA_EN_ESPANOL = re.compile(r"¿[^¿?]{25,420}\?")
+
+
+def comentario_para_publicar(comment):
+    """Saca del comentario las instrucciones del pedido y deja las preguntas de la noticia."""
+    texto = comment.strip() if isinstance(comment, str) else ""
+    if not texto or not _INSTRUCCIONES_DEL_PEDIDO.search(texto):
+        return texto
+
+    preguntas = []
+    vistos = set()
+    for pregunta in _PREGUNTA_EN_ESPANOL.findall(texto):
+        if "descubrir noticias lat" in pregunta.lower():
+            continue
+        clave = pregunta.lower()
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        preguntas.append(pregunta)
+        if len(preguntas) == 3:
+            break
+
+    resto = ""
+    for marca in ("👇 Abrimos el debate", "📱 ¿Acabás de descubrir", "📱 ¿Acabas de descubrir"):
+        pos = texto.find(marca)
+        if pos != -1:
+            resto = texto[pos:].strip()
+            break
+
+    partes = ["💬 ¡Queremos conocer tu opinión!", ""]
+    if preguntas:
+        partes.extend(["\n\n".join(preguntas), ""])
+    if resto:
+        partes.append(resto)
+    logger.warning(
+        "  [YouTube Uploader] El comentario traía instrucciones del pedido. Se publican solo las preguntas."
+    )
+    return "\n".join(partes).strip()
+
+
 def publicar_comentario(youtube, video_id, comment):
     """Publica en el video el comentario recibido. Un fallo aquí no anula la subida."""
-    texto = comment.strip() if isinstance(comment, str) else ""
+    texto = comentario_para_publicar(comment)
     if not texto:
         return False
     if len(texto) > YOUTUBE_COMMENT_MAX:
