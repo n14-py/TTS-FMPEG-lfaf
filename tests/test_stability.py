@@ -586,6 +586,30 @@ class YouTubeUploadClientTests(unittest.TestCase):
             "💬 ¡Queremos conocer tu opinión!\n\n¿Qué harías en este caso?",
         )
 
+    def test_comment_drops_the_prompt_and_keeps_the_questions(self):
+        sucio = (
+            "💬 ¡Queremos conocer tu opinión! : 2-3 questions, each on a new line, ending in '?'. "
+            "Must mention a name, institution, place, or fact from the news. "
+            "Must allow different answers (controversy/debate). No generic \"What do you think?\". "
+            "Question 1: ¿Deberían las organizaciones estudiantiles y los sindicatos liderar la agenda de las demandas económicas en Europa? "
+            "Question 2: ¿Es la crisis de acceso a la vivienda el principal motor de la movilización juvenil en los más de 25 países involucrados? "
+            "👇 Abrimos el debate: te leemos en los comentarios.\n\n"
+            "📱 ¿Acabás de descubrir Noticias LAT?\n"
+            "https://play.google.com/store/apps/details?id=com.noticiaslat.app"
+        )
+        youtube = _YouTubeDoble()
+        posted = youtube_uploader.publicar_comentario(youtube, "vid123", sucio)
+        self.assertTrue(posted)
+        texto = youtube.comments.calls[0][1]["snippet"]["topLevelComment"]["snippet"]["textOriginal"]
+        self.assertNotIn("Question 1", texto)
+        self.assertNotIn("Question 2", texto)
+        self.assertNotIn("2-3 questions", texto)
+        self.assertNotIn("What do you think", texto)
+        self.assertIn("organizaciones estudiantiles", texto)
+        self.assertIn("acceso a la vivienda", texto)
+        self.assertIn("👇 Abrimos el debate", texto)
+        self.assertIn("play.google.com", texto)
+
     def test_upload_without_comment_does_not_post(self):
         youtube = _YouTubeDoble()
         with patch("youtube_uploader.os.path.exists", side_effect=lambda path: path == "/tmp/noticia.mp4"), \
